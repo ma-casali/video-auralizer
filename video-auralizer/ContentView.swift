@@ -7,9 +7,13 @@
 
 import SwiftUI
 
+import SwiftUI
+
 struct ContentView: View {
     var body: some View {
-        CameraView()
-            .edgesIgnoringSafeArea(.all)
+        VStack {
+            Text("Camera is running…")
+                .padding()
+        }
     }
 }

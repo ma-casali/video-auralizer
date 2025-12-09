@@ -8,10 +8,14 @@
 import SwiftUI
 
 @main
-struct video_auralizerApp: App {
+struct MyApp: App {
+    // Initialize VideoConverter for the entire app lifetime
+    @StateObject private var converter = VideoConverter()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(converter)
         }
     }
 }
