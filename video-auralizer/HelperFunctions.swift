@@ -9,6 +9,7 @@ import Foundation
 import AVFoundation
 import Accelerate
 
+// MARK: - Complex Struct
 struct Complex {
     var real: Float
     var imag: Float
@@ -43,25 +44,15 @@ struct Complex {
         sqrt(real*real + imag*imag)
     }
     
-    static func conjugate(_ c: Complex) -> Complex {
-        Complex(c.real, -c.imag)
+    var conjugate: Complex {
+        Complex(real, -imag)
     }
 }
 
 // MARK: - Linear / Log2 Conversion
-
-func linearToLog2(_ x: [Float], x0: Float = 20.0, x1: Float = 20_000.0, y0: Float = 400.0, y1: Float = 790.0)
--> [Float]{
-    var z = [Float](repeating: 0, count: x.count)
-    var m: Float = 0.0
-    var b: Float = 0.0
-    
-    for i in 0..<x.count {
-        m = (y1 - y0) / (log2(x1 / x0))
-        b = y0
-        z[i] = m * log2(x[i] / x0) + b
-    }
-    return z
+func linearToLog2(_ x: [Float], x0: Float = 20.0, x1: Float = 20_000.0, y0: Float = 400.0, y1: Float = 790.0) -> [Float] {
+    let m = (y1 - y0) / log2(x1 / x0)
+    return x.map { m * log2($0 / x0) + y0 }
 }
 
 // MARK: - LUT Storage
@@ -69,7 +60,7 @@ private var f0LUT: [Float] = []
 private let lutSize = 256
 
 // MARK: - Load LUT from Bundle
-public func loadFrequencyLUT() {
+func loadFrequencyLUT() {
     guard let url = Bundle.main.url(forResource: "frequency_lut", withExtension: "bin") else {
         print("LUT file not found in bundle!")
         return
@@ -98,7 +89,7 @@ public func loadFrequencyLUT() {
 }
 
 // MARK: - Lookup Function
-public func lookupF0(r: Int, g: Int, b: Int) -> Float {
+func lookupF0(r: Int, g: Int, b: Int) -> Float {
     guard !f0LUT.isEmpty else {
         print("Warning: LUT not loaded yet")
         return 400.0  // fallback value
@@ -111,12 +102,22 @@ public func lookupF0(r: Int, g: Int, b: Int) -> Float {
     let index = rClamped * lutSize * lutSize + gClamped * lutSize + bClamped
     return f0LUT[index]
 }
+
 // MARK: - Mirror & Conjugate
-func mirrorAndConjugate(_ spec: [Complex]) -> [Complex] {
+func mirrorAndConjugate(_ spec: [Complex]) -> [DSPComplex] {
     let N = spec.count
-    var out = [Complex](repeating: Complex(0,0), count: 2*N+1)
-    for i in 0..<N { out[i+1] = spec[i] }
-    for i in 0..<N { out[N+1+i] = Complex.conjugate(spec[N-1-i])}
+    var out = [DSPComplex](repeating: DSPComplex(real: 0, imag: 0), count: 2*N+1)
+    
+    for i in 0..<N {
+        let c = spec[i]
+        out[i+1] = DSPComplex(real: c.real, imag: c.imag)
+    }
+    
+    for i in 0..<N {
+        let c = spec[N-1-i].conjugate
+        out[N+1+i] = DSPComplex(real: c.real, imag: c.imag)
+    }
+    
     return out
 }
 
@@ -136,12 +137,43 @@ func lutFilePath(fileName: String = "frequency_lut.bin") -> URL {
     return docs.appendingPathComponent(fileName)
 }
 
-// MARK: - numpy linspace equivalent
+// MARK: - Linspace
 func linspace(start: Float, end: Float, num: Int) -> [Float] {
     guard num > 1 else { return [start] }
-    
     let step = (end - start) / Float(num - 1)
-    return (0..<num).map { i in
-        start + Float(i) * step
-    }
+    return (0..<num).map { start + Float($0) * step }
 }
+
+// MARK: - IFFT
+func iFFT(_ spectrum: [DSPComplex]) -> [Float] {
+    let count = spectrum.count
+    let log2N = vDSP_Length(log2(Float(count)))
+    
+    let realPtr = UnsafeMutablePointer<Float>.allocate(capacity: count)
+    let imagPtr = UnsafeMutablePointer<Float>.allocate(capacity: count)
+    
+    for i in 0..<count {
+        realPtr[i] = spectrum[i].real
+        imagPtr[i] = spectrum[i].imag
+    }
+    
+    var split = DSPSplitComplex(realp: realPtr, imagp: imagPtr)
+    
+    guard let fftSetup = vDSP_create_fftsetup(log2N, FFTRadix(kFFTRadix2)) else {
+        fatalError("FFT setup failed")
+    }
+    
+    vDSP_fft_zip(fftSetup, &split, 1, log2N, FFTDirection(FFT_INVERSE))
+    
+    var scale = 1.0 / Float(count)
+    vDSP_vsmul(split.realp, 1, &scale, split.realp, 1, vDSP_Length(count))
+    
+    let output = Array(UnsafeBufferPointer(start: split.realp, count: count))
+    
+    vDSP_destroy_fftsetup(fftSetup)
+    realPtr.deallocate()
+    imagPtr.deallocate()
+    
+    return output
+}
+
