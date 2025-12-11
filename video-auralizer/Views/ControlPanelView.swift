@@ -30,7 +30,7 @@ struct ControlPanelView: View {
                 .environment(\.layoutDirection, .rightToLeft)
                 Text("LP Cutoff: \(converter.lpCutoff, specifier: "%.0f") Hz")
                 
-                NavigationLink(destination: ExtraControlView(converter: VideoConverter())){
+                NavigationLink(destination: ExtraControlView(converter: converter)){
                     Text("More Controls")
                     .foregroundColor(.blue)
                     .padding()

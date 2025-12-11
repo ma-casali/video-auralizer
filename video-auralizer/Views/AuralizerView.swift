@@ -16,7 +16,7 @@ struct AuralizerView: View {
     @State private var screenSize: CGSize = .zero
     
     var body: some View {
-        VStack(spacing: 20) {
+        NavigationStack {
             
             // --- Video preview ---
             CameraPreview(session: camera.session)
@@ -26,13 +26,34 @@ struct AuralizerView: View {
                 .shadow(radius: 5)
             
             // --- Spectrum analyzer & color bar ---
-            VStack {
+            ZStack {
                 SpectrumView(converter: converter)
                     .frame(height: 150)
+                    .clipped()
+                    .padding(.horizontal, 10)
                 
-                ControlPanelView(converter: converter)
-                    .frame(height: 100)
+                FilterTool(x1Value: Binding(
+                            get: {CGFloat(converter.hpCutoff/20_000.0)},
+                            set: {converter.hpCutoff = Float($0)*20_000.0}
+                            ),
+                           y1Value: Binding(
+                            get: {CGFloat(converter.hpOrder/10.0)} ,
+                            set: {converter.hpOrder = Float($0)*10.0}
+                            ),
+                           x2Value: Binding(
+                            get: {CGFloat(converter.lpCutoff/20_000.0)} ,
+                            set: {converter.lpCutoff = Float($0)*20_000.0}
+                            ),
+                           y2Value: Binding(
+                            get: {CGFloat(converter.lpOrder/10.0)} ,
+                            set: {converter.lpOrder = Float($0)*10.0}
+                            )
+                    )
+                .padding(.horizontal, 10)
+                .allowsHitTesting(true)
+                .contentShape(Rectangle())
             }
+            .frame(height: 150)
             .background(
                         WindowReader { window in
                             let size = window.windowScene?.screen.bounds.size ?? .zero
@@ -44,6 +65,19 @@ struct AuralizerView: View {
                 camera.startSession()
                 converter.attachToSession(camera.session)
             }
+            VStack{
+                Text(String(format: "High-Pass Cutoff: %.2f with Order: %.2f", converter.hpCutoff, converter.hpOrder))
+                Text(String(format: "Low-Pass Cutoff: %.2f with Order: %.2f", converter.lpCutoff, converter.lpOrder))
+            }
+            
+            NavigationLink(destination: ExtraControlView(converter: converter)){
+                Text("More Controls")
+                .foregroundColor(.blue)
+                .padding()
+                .background(Color.white)
+                .cornerRadius(8)
+            }
+
         }
     }
 }

@@ -14,7 +14,7 @@ struct MyApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AuralizerView()
+            HomeView()
                 .environmentObject(converter)
         }
     }

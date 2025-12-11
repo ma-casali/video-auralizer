@@ -30,7 +30,7 @@ class CameraModel: NSObject, ObservableObject {
         session.addInput(input)
         session.commitConfiguration()
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.main.async {
             self.session.startRunning()
         }
     }

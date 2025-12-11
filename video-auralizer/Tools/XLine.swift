@@ -71,8 +71,8 @@ struct XLine: View {
                 
                 // --- Dashed Circle (x2) ---
                 Circle()
-                    .fill(Color.white)
-                    .stroke(Color.black, style: StrokeStyle(lineWidth: 2, dash: [4]))
+                    .fill(Color.white.opacity(1.0))
+                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2, dash: [4]))
                     .frame(width: 24, height: 24)
                     .position(x: x2Value * width, y: centerY)
                     .gesture(

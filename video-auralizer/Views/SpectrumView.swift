@@ -51,23 +51,12 @@ struct SpectrumView: View {
                             else { path.addLine(to: CGPoint(x: x, y: y)) }
                         }
                         context.stroke(path, with: .color(.black), lineWidth: 2)
-                        
-                        // --- Overlay HP/LP cutoffs ---
-                        let hpX = width * CGFloat(converter.hpCutoff / 20000)
-                        let lpX = width * CGFloat(converter.lpCutoff / 20000)
-                        context.stroke(Path { p in
-                            p.move(to: CGPoint(x: hpX, y: 0))
-                            p.addLine(to: CGPoint(x: hpX, y: height))
-                            p.move(to: CGPoint(x: lpX, y: 0))
-                            p.addLine(to: CGPoint(x: lpX, y: height))
-                        }, with: .color(.black), lineWidth: 1)
                     }
                 }
             }
             .cornerRadius(8)
             .shadow(radius: 3)
         }
-        .padding(.bottom)
     }
 }
 
