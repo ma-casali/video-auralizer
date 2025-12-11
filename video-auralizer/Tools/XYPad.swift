@@ -23,8 +23,8 @@ struct MorphingWaveLine: Shape {
 
         let periods = CGFloat(numZeroCrossings + 1) / 2
         let steps = max(10, Int(periods * 50))   // sampling resolution
-        let sineAmplitude = CGFloat(1.0)
-        let triAmplitude = CGFloat(15.0)
+        let sineAmplitude = CGFloat(10.0)
+        let triAmplitude = CGFloat(20.0)
 
         path.move(to: start)
 
@@ -37,9 +37,14 @@ struct MorphingWaveLine: Shape {
 
             // Triangle wave with integer periods
             let tri = -triAmplitude * 2.0 / .pi * asin( sin(2 * .pi * (t / (1.0 / periods))))
+            
+            // Sinc function
+            let sinc = -abs(sineAmplitude * sin((t-0.5) * .pi * periods) / ((t-0.5) * .pi * periods))
+            
+            let Q = 15.0 / (1.0 + 100.0 * (pow(t-0.5, 2.0)))
 
             // Morph
-            let wave =  (1 - pointiness/sqrt(2)) * sine + pointiness/sqrt(2) * tri
+            let wave =  Q * sinc
             let offset = wave
 
             // Rotate into line direction
@@ -72,14 +77,14 @@ struct XYPad: View {
                     start: CGPoint(x: 0, y: height),
                     end: CGPoint(x: 0, y: 0),
                     pointiness: CGFloat(sqrt(pow(xValue,2) + pow(yValue,2))),
-                    numZeroCrossings: 32
+                    numZeroCrossings: 16
                 )
                 
                 MorphingWaveLine(
                     start: CGPoint(x: 0, y: 0),
                     end: CGPoint(x: width, y: 0),
                     pointiness: CGFloat(sqrt(pow(xValue,2) + pow(yValue,2))),
-                    numZeroCrossings: 32
+                    numZeroCrossings: 16
                 )
                 
                 MorphingWaveLine(
