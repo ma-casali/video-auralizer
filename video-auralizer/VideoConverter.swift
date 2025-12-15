@@ -8,20 +8,20 @@ import simd
 import simd
 
 struct SpectrumParams {
-    var T: Float
-    var Q_scaling: Float
-    var spectrumMixing: Float
-    var padding0: Float = 0         // pad to align next UInt32
+    let T: Float
+    let Q_scaling: Float
+    let spectrumMixing: Float
+    let padding0: Float = 0         // pad to align next UInt32
     
-    var P: UInt32
-    var F: UInt32
-    var padding1: UInt32 = 0        // pad to 16 bytes
+    let P: UInt32
+    let F: UInt32
+    let padding1: UInt32 = 0        // pad to 16 bytes
     
-    var hpCutoff: Float
-    var lpCutoff: Float
-    var hpOrder: Float
-    var lpOrder: Float
-    var padding2: UInt32 = 0        // pad to 16 bytes
+    let hpCutoff: Float
+    let lpCutoff: Float
+    let hpOrder: Float
+    let lpOrder: Float
+    let padding2: UInt32 = 0        // pad to 16 bytes
 }
 
 
@@ -188,13 +188,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
               let cvTexture = cvTextureOut,
               let texture = CVMetalTextureGetTexture(cvTexture) else { return }
         
-        processFrame(texture: texture)
-        
-    }
-    
-    // MARK: - Set up Params for Processing
-    func setupParams(P: Int, F: Int) {
-        spectrumParams = SpectrumParams(
+        let newParams = SpectrumParams(
             T: self.N,
             Q_scaling: self.Q_scaling,
             spectrumMixing: self.spectrumMixing,
@@ -206,17 +200,36 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             lpOrder: self.lpOrder
         )
         
-        metalBuffer = device.makeBuffer(bytes: &spectrumParams,
-                                        length: MemoryLayout<SpectrumParams>.stride,
-                                        options: [])
+        self.updateParamsOnMain(newParams: newParams)
+        
+        processFrame(texture: texture)
+        
+    }
+    
+    private let audioQueue = DispatchQueue(label: "audioQueue") // serialize audio buffer scheduling
+    private let paramsQueue = DispatchQueue(label: "paramsQueue", attributes: .concurrent)
+    
+    private var _currentParams: SpectrumParams!
+    
+    func updateParamsOnMain(_ newParams: SpectrumParams){
+        // Call this on main whenever parameters change
+        paramsQueue.async(flags: .barrier) {
+            self._currentParams = newParams
+        }
+    }
+    
+    private func getCurrentParams() -> SpectrumParams {
+        paramsQueue.sync {
+            _currentParams
+        }
     }
     
     // MARK: - Process a frame of audio
-    private let audioQueue = DispatchQueue(label: "audioQueue") // serialize audio buffer scheduling
-    
     private func processFrame(texture: MTLTexture) {
-        DispatchQueue.main.async { [weak self] in
+        audioQueue.async { [weak self] in
             guard let self = self else { return }
+            
+            let params = self.getCurrentParams()
             
             // --- GPU -> CPU copy ---
             let width = texture.width
@@ -273,75 +286,74 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         }
     }
             
-            // MARK: - Prepare for GPU processing
-            func computeTotalSpectrumGPU(amplitudeFrame: [Float], f0Frame: [Float], frequencies: [Float]) -> [Complex] {
-                let F = frequencies.count
-                let P = amplitudeFrame.count
-                
-                // GPU buffers
-                let amplitudeBuffer = device.makeBuffer(bytes: amplitudeFrame,
-                                                        length: P * MemoryLayout<Float>.stride,
-                                                        options: [])
-                let f0Buffer = device.makeBuffer(bytes: f0Frame,
-                                                 length: P * MemoryLayout<Float>.stride,
-                                                 options: [])
-                let freqBuffer = device.makeBuffer(bytes: frequencies,
-                                                   length: F * MemoryLayout<Float>.stride,
-                                                   options: [])
-                
-                var previous = previousSpectrum.map { simd_float2($0.real, $0.imag) }
-                let previousBuffer = device.makeBuffer(bytes: &previous, length: F * MemoryLayout<simd_float2>.size, options: [])
-                
-                var totalSumData = [simd_float2](repeating: simd_float2(0,0), count: F)
-                let totalSumBuffer = device.makeBuffer(bytes: &totalSumData, length: F * MemoryLayout<simd_float2>.size, options: [])
-                
-                var params = SpectrumParams(
-                    T: self.N / self.Hanning_Window_Multiplier,
-                    Q_scaling: self.Q_scaling,
-                    spectrumMixing: self.spectrumMixing,
-                    P: UInt32(P),
-                    F: UInt32(F),
-                    hpCutoff: self.hpCutoff,
-                    lpCutoff: self.lpCutoff,
-                    hpOrder: self.hpOrder,
-                    lpOrder: self.lpOrder
-                )
-                
-                let paramBuffer = device.makeBuffer(bytes: &params,
-                                                    length: MemoryLayout<SpectrumParams>.stride,
-                                                    options: [])
-                
-                // Encode GPU command
-                guard let commandBuffer = commandQueue.makeCommandBuffer(),
-                      let encoder = commandBuffer.makeComputeCommandEncoder() else { return [] }
-                
-                encoder.setComputePipelineState(computePipeline)
-                encoder.setBuffer(amplitudeBuffer, offset: 0, index: 0)
-                encoder.setBuffer(f0Buffer, offset: 0, index: 1)
-                encoder.setBuffer(freqBuffer, offset: 0, index: 2)
-                encoder.setBuffer(previousBuffer, offset: 0, index: 3)
-                encoder.setBuffer(totalSumBuffer, offset: 0, index: 4)
-                encoder.setBuffer(paramBuffer, offset: 0, index: 5)
-                
-                // Launch threads
-                let threadsPerThreadgroup = MTLSize(width: 16, height: 1, depth: 1)
-                let numThreadgroups = MTLSize(width: (F + 15) / 16, height: 1, depth: 1)
-                
-                encoder.dispatchThreadgroups(numThreadgroups, threadsPerThreadgroup: threadsPerThreadgroup)
-                
-                encoder.endEncoding()
-                commandBuffer.commit()
-                commandBuffer.waitUntilCompleted()
-                
-                // Read back
-                let pointer = totalSumBuffer!.contents().bindMemory(to: simd_float2.self, capacity: F)
-                var result = [Complex]()
-                for i in 0..<F {
-                    let val = pointer[i]
-                    result.append(Complex(val.x, val.y))
-                }
-                
-                self.previousSpectrum = result
-                return result
-            }
+    // MARK: - Prepare for GPU processing
+    func computeTotalSpectrumGPU(amplitudeFrame: [Float], f0Frame: [Float], frequencies: [Float]) -> [Complex] {
+        let F = frequencies.count
+        let P = amplitudeFrame.count
+        
+        // GPU buffers
+        let amplitudeBuffer = device.makeBuffer(bytes: amplitudeFrame,
+                                                length: P * MemoryLayout<Float>.stride,
+                                                options: [])
+        let f0Buffer = device.makeBuffer(bytes: f0Frame,
+                                         length: P * MemoryLayout<Float>.stride,
+                                         options: [])
+        let freqBuffer = device.makeBuffer(bytes: frequencies,
+                                           length: F * MemoryLayout<Float>.stride,
+                                           options: [])
+        
+        var previous = previousSpectrum.map { simd_float2($0.real, $0.imag) }
+        let previousBuffer = device.makeBuffer(bytes: &previous, length: F * MemoryLayout<simd_float2>.size, options: [])
+        
+        var totalSumData = [simd_float2](repeating: simd_float2(0,0), count: F)
+        let totalSumBuffer = device.makeBuffer(bytes: &totalSumData, length: F * MemoryLayout<simd_float2>.size, options: [])
+        
+        var params = SpectrumParams(
+            T: self.N / self.Hanning_Window_Multiplier,
+            Q_scaling: self.Q_scaling,
+            spectrumMixing: self.spectrumMixing,
+            P: UInt32(P),
+            F: UInt32(F),
+            hpCutoff: self.hpCutoff,
+            lpCutoff: self.lpCutoff,
+            hpOrder: self.hpOrder,
+            lpOrder: self.lpOrder
+        )
+        
+        let paramBuffer = device.makeBuffer(bytes: &params,
+                                            length: MemoryLayout<SpectrumParams>.stride,
+                                            options: [])
+        
+        // Encode GPU command
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else { return [] }
+        
+        encoder.setComputePipelineState(computePipeline)
+        encoder.setBuffer(amplitudeBuffer, offset: 0, index: 0)
+        encoder.setBuffer(f0Buffer, offset: 0, index: 1)
+        encoder.setBuffer(freqBuffer, offset: 0, index: 2)
+        encoder.setBuffer(previousBuffer, offset: 0, index: 3)
+        encoder.setBuffer(totalSumBuffer, offset: 0, index: 4)
+        encoder.setBuffer(paramBuffer, offset: 0, index: 5)
+        
+        // Launch threads
+        let threadsPerThreadgroup = MTLSize(width: 16, height: 1, depth: 1)
+        let numThreadgroups = MTLSize(width: (F + 15) / 16, height: 1, depth: 1)
+        
+        encoder.dispatchThreadgroups(numThreadgroups, threadsPerThreadgroup: threadsPerThreadgroup)
+        
+        encoder.endEncoding()
+        commandBuffer.commit()
+        
+        // Read back
+        let pointer = totalSumBuffer!.contents().bindMemory(to: simd_float2.self, capacity: F)
+        var result = [Complex]()
+        for i in 0..<F {
+            let val = pointer[i]
+            result.append(Complex(val.x, val.y))
         }
+        
+        self.previousSpectrum = result
+        return result
+    }
+}
