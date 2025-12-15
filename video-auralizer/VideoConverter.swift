@@ -44,14 +44,14 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private let videoFs: Float32 = 30.0
     private var N: Float
     private var F: Int
-    private var original_f: [Float] = []
+    @Published public var original_f: [Float] = []
     private var f: [Float] = []
     private var outputSignal: [Float] = []
     
     // future controllable parameters
     @Published public var attack: Float32 = 0.25
     @Published public var release: Float32 = 0.25
-    @Published public var spectrumMixing: Float32 = 0.5
+    @Published public var spectrumMixing: Float32 = 0.9
     @Published public var Q_scaling: Float32 = 1.0
     @Published public var Hanning_Window_Multiplier: Float32 = 1.0
     @Published public var hpCutoff: Float32 = 200.0
@@ -245,9 +245,9 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             let eps: Float = 1e-9
             let amplitudeFrame: [Float] = rgbArray.map { max(Float(max($0.r, $0.g, $0.b)) / 255.0, eps) }
             let f0Frame: [Float] = rgbArray.map { lookupF0(r: Int($0.r), g: Int($0.g), b: Int($0.b)) }
-            
+
             // Compute spectrum and publish updates safely on main thread
-            let totalSpectrum = self.computeTotalSpectrumGPU(amplitudeFrame: amplitudeFrame, f0Frame: f0Frame, frequencies: self.original_f)
+            let totalSpectrum = self.computeTotalSpectrumGPU(amplitudeFrame: amplitudeFrame, f0Frame: f0Frame, frequencies: self.f)
             
             // Mirror and conjugate
             let fullSpectrum = mirrorAndConjugate(totalSpectrum)
@@ -296,7 +296,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                 let totalSumBuffer = device.makeBuffer(bytes: &totalSumData, length: F * MemoryLayout<simd_float2>.size, options: [])
                 
                 var params = SpectrumParams(
-                    T: self.N,
+                    T: self.N / self.Hanning_Window_Multiplier,
                     Q_scaling: self.Q_scaling,
                     spectrumMixing: self.spectrumMixing,
                     P: UInt32(P),
@@ -307,12 +307,9 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                     lpOrder: self.lpOrder
                 )
                 
-                print(String(format: "HP: (%d, %d), LP: (%d, %d)", Int(params.hpCutoff), Int(params.hpOrder), Int(params.lpCutoff), Int(params.lpOrder)))
-                
                 let paramBuffer = device.makeBuffer(bytes: &params,
                                                     length: MemoryLayout<SpectrumParams>.stride,
                                                     options: [])
-                
                 
                 // Encode GPU command
                 guard let commandBuffer = commandQueue.makeCommandBuffer(),

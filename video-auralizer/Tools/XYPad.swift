@@ -32,12 +32,6 @@ struct MorphingWaveLine: Shape {
             let t = CGFloat(i) / CGFloat(steps)
             let baseX = t * length
 
-            // Sine wave
-            let sine = -sineAmplitude * sin(2 * .pi * t * periods)
-
-            // Triangle wave with integer periods
-            let tri = -triAmplitude * 2.0 / .pi * asin( sin(2 * .pi * (t / (1.0 / periods))))
-            
             // Sinc function
             let sinc = -abs(sineAmplitude * sin((t-0.5) * .pi * periods) / ((t-0.5) * .pi * periods))
             

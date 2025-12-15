@@ -33,16 +33,16 @@ struct AuralizerView: View {
                     .padding(.horizontal, 10)
                 
                 FilterTool(x1Value: Binding(
-                            get: {CGFloat(converter.hpCutoff/20_000.0)},
-                            set: {converter.hpCutoff = Float($0)*20_000.0}
+                            get: {CGFloat(log2(converter.hpCutoff/20.0)/log2(20_000.0/20.0))},
+                            set: {converter.hpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
                             ),
                            y1Value: Binding(
                             get: {CGFloat(converter.hpOrder/10.0)} ,
                             set: {converter.hpOrder = Float($0)*10.0}
                             ),
                            x2Value: Binding(
-                            get: {CGFloat(converter.lpCutoff/20_000.0)} ,
-                            set: {converter.lpCutoff = Float($0)*20_000.0}
+                            get: {CGFloat(log2(converter.lpCutoff/20.0)/log2(20_000.0/20.0))},
+                            set: {converter.lpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
                             ),
                            y2Value: Binding(
                             get: {CGFloat(converter.lpOrder/10.0)} ,
@@ -52,6 +52,8 @@ struct AuralizerView: View {
                 .padding(.horizontal, 10)
                 .allowsHitTesting(true)
                 .contentShape(Rectangle())
+                .frame(height: 120)
+                .position(CGPoint(x: screenSize.width / 2, y: 60))
             }
             .frame(height: 150)
             .background(
