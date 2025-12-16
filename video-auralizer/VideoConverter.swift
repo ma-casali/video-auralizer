@@ -4,8 +4,17 @@ import Metal
 import MetalPerformanceShaders
 import Combine
 import simd
+import os
 
-import simd
+struct AudioParams {
+    let hpCutoff: Float
+    let lpCutoff: Float
+    let hpOrder: Float
+    let lpOrder: Float
+    let Q_scaling: Float
+    let spectrumMixing: Float
+    let Hanning_Window_Multiplier: Float
+}
 
 struct SpectrumParams {
     let T: Float
@@ -29,7 +38,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     
     private let audioEngine = AVAudioEngine()
     private var sourceNode: AVAudioSourceNode!
-    @Published public var lastFrame: [Float] = []
     private var frameIndex: Int = 0
     private var audioFormat: AVAudioFormat!
     
@@ -62,8 +70,17 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     var spectrumParams: SpectrumParams!  // persistent
     
     // history parameters
-    @Published public var previousSpectrum: [Complex]
+    private var previousSpectrumDSP: [Complex]
+    @Published private(set) var previousSpectrum: [Complex]
     private var runningMax: Float = 0.0
+    
+    // buffer parameters
+    private let audioBufferSize = 16
+    private var audioFrames: [[Float]] = []
+    private var writeIndex = 0
+    private var readIndex = 0
+    private var availableFrames = 0
+    private let audioBufferLock = NSLock()
     
     override init() {
         print("Initalizing VideoConverter...")
@@ -72,6 +89,10 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         let F_float: Float32 = floor(N / 2)
         self.F = max(1, Int(F_float))
         self.previousSpectrum = [Complex](repeating: Complex(0,0), count: self.F)
+        self.previousSpectrumDSP = [Complex](repeating: Complex(0,0), count: self.F)
+        
+        audioFrames = Array(repeating: [Float](repeating: 0, count: Int(N)), count: audioBufferSize)
+
         
         super.init()
         
@@ -121,6 +142,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
             try AVAudioSession.sharedInstance().setActive(true)
+            try AVAudioSession.sharedInstance().setPreferredIOBufferDuration(Double(N)/44100.0)
             print("Audio session configured")
         } catch {
             print("Failed to configure audio session: \(error)")
@@ -131,24 +153,34 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         sourceNode = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
             guard let self = self else { return noErr }
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            guard !self.lastFrame.isEmpty else {
-                // Fill with zeros if no frame yet
-                for buffer in ablPointer {
-                    memset(buffer.mData, 0, Int(frameCount) * MemoryLayout<Float>.size)
-                }
-                return noErr
-            }
+            
+            self.audioBufferLock.lock()
             
             for buffer in ablPointer {
                 let buf = buffer.mData!.assumingMemoryBound(to: Float.self)
-                for frame in 0..<Int(frameCount) {
-                    buf[frame] = self.lastFrame[self.frameIndex]
-                    self.frameIndex += 1
-                    if self.frameIndex >= self.lastFrame.count {
-                        self.frameIndex = 0 // repeat last frame
+                var samplesWritten = 0
+                
+                while samplesWritten < Int(frameCount) {
+                    if self.availableFrames == 0 {
+                        // no data ready: fill with zeros
+                        buf[samplesWritten] = 0.0
+                        samplesWritten += 1
+                        continue
                     }
+                    
+                    let currentFrame = self.audioFrames[self.readIndex]
+                    let frameSamples = currentFrame.count
+                    let samplesToCopy = min(frameSamples, Int(frameCount) - samplesWritten)
+                    
+                    buf.advanced(by: samplesWritten).update(from: currentFrame, count: samplesToCopy)
+                    
+                    samplesWritten += samplesToCopy
+                    self.readIndex = (self.readIndex + 1) % self.audioBufferSize
+                    
+                    self.availableFrames -= 1
                 }
             }
+            self.audioBufferLock.unlock()
             return noErr
         }
         
@@ -187,49 +219,44 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         guard status == kCVReturnSuccess,
               let cvTexture = cvTextureOut,
               let texture = CVMetalTextureGetTexture(cvTexture) else { return }
-        
-        let newParams = SpectrumParams(
-            T: self.N,
-            Q_scaling: self.Q_scaling,
-            spectrumMixing: self.spectrumMixing,
-            P: UInt32(P),
-            F: UInt32(F),
-            hpCutoff: self.hpCutoff,
-            lpCutoff: self.lpCutoff,
-            hpOrder: self.hpOrder,
-            lpOrder: self.lpOrder
-        )
-        
-        self.updateParamsOnMain(newParams: newParams)
-        
+
         processFrame(texture: texture)
         
     }
     
+    // MARK: - Setup Queues
     private let audioQueue = DispatchQueue(label: "audioQueue") // serialize audio buffer scheduling
     private let paramsQueue = DispatchQueue(label: "paramsQueue", attributes: .concurrent)
     
-    private var _currentParams: SpectrumParams!
+    private var currentAudioParams = AudioParams(
+        hpCutoff: 400.0, // color spectrum frequency
+        lpCutoff: 790.0, // color spectrum frequency
+        hpOrder: 1.0,
+        lpOrder: 1.0,
+        Q_scaling: 1.0,
+        spectrumMixing: 0.85,
+        Hanning_Window_Multiplier: 1.0
+    )
     
-    func updateParamsOnMain(_ newParams: SpectrumParams){
-        // Call this on main whenever parameters change
+    func setAudioParams(_ newParams: AudioParams){
         paramsQueue.async(flags: .barrier) {
-            self._currentParams = newParams
+            self.currentAudioParams = newParams
         }
     }
     
-    private func getCurrentParams() -> SpectrumParams {
-        paramsQueue.sync {
-            _currentParams
-        }
-    }
+//    private var audioFrameA = [Float]()
+//    private var audioFrameB = [Float]()
+//    private let audioFrameLock = OSAllocatedUnfairLock()
+//    private var readFromA: Bool = true
+    
+    private var lastFrameTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
     
     // MARK: - Process a frame of audio
     private func processFrame(texture: MTLTexture) {
         audioQueue.async { [weak self] in
             guard let self = self else { return }
             
-            let params = self.getCurrentParams()
+            let audioParams: AudioParams = self.paramsQueue.sync { self.currentAudioParams }
             
             // --- GPU -> CPU copy ---
             let width = texture.width
@@ -259,35 +286,81 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             let amplitudeFrame: [Float] = rgbArray.map { max(Float(max($0.r, $0.g, $0.b)) / 255.0, eps) }
             let f0Frame: [Float] = rgbArray.map { lookupF0(r: Int($0.r), g: Int($0.g), b: Int($0.b)) }
 
-            // Compute spectrum and publish updates safely on main thread
-            let totalSpectrum = self.computeTotalSpectrumGPU(amplitudeFrame: amplitudeFrame, f0Frame: f0Frame, frequencies: self.f)
+            let P = amplitudeFrame.count
             
-            // Mirror and conjugate
-            let fullSpectrum = mirrorAndConjugate(totalSpectrum)
+           self.paramsQueue.async(flags: .barrier) {
+               self.currentAudioParams = AudioParams(
+                   hpCutoff: linearToLog2Single(self.hpCutoff),
+                   lpCutoff: linearToLog2Single(self.lpCutoff),
+                   hpOrder: self.hpOrder,
+                   lpOrder: self.lpOrder,
+                   Q_scaling: self.Q_scaling,
+                   spectrumMixing: self.spectrumMixing,
+                   Hanning_Window_Multiplier: self.Hanning_Window_Multiplier
+               )
+           }
             
-            // Take the IFFT
-            let signal = iFFT(fullSpectrum)
-            
-            // Normalize using sigmoid
-            let framePeak = (signal.map { abs($0) }.max() ?? 0) + eps
-            if framePeak > self.runningMax {
-                self.runningMax = self.attack * framePeak + (1.0 - self.attack) * self.runningMax
-            } else {
-                self.runningMax = self.release * framePeak + (1.0 - self.release) * self.runningMax
+            let spectrumParams = SpectrumParams(
+                T: self.N / audioParams.Hanning_Window_Multiplier,
+                Q_scaling: audioParams.Q_scaling,
+                spectrumMixing: audioParams.spectrumMixing,
+                P: UInt32(P),
+                F: UInt32(F),
+                hpCutoff: audioParams.hpCutoff,
+                lpCutoff: audioParams.lpCutoff,
+                hpOrder: audioParams.hpOrder,
+                lpOrder: audioParams.lpOrder
+            )
+
+            // Compute Spectrum on GPU
+            self.computeTotalSpectrumGPU(
+                amplitudeFrame: amplitudeFrame,
+                f0Frame: f0Frame,
+                frequencies: self.f,
+                spectrumParams: spectrumParams
+            ) { totalSpectrum in
+                // Mirror and conjugate
+                let fullSpectrum = mirrorAndConjugate(totalSpectrum)
+                
+                // Take the IFFT
+                let signal = iFFT(fullSpectrum)
+                
+                // Normalize using sigmoid
+                let framePeak = (signal.map { abs($0) }.max() ?? 0) + eps
+                if framePeak > self.runningMax {
+                    self.runningMax = self.attack * framePeak + (1.0 - self.attack) * self.runningMax
+                } else {
+                    self.runningMax = self.release * framePeak + (1.0 - self.release) * self.runningMax
+                }
+                
+                var normFactor = sigmoidNormalize(x: framePeak, M: self.runningMax)
+                normFactor = max(min(normFactor, 1.0), 0.0)
+                let outputSignalFrame = signal.map { $0 / (framePeak / normFactor) }
+                
+                let now = CFAbsoluteTimeGetCurrent()
+                let delta = now - self.lastFrameTime
+                self.lastFrameTime = now
+                
+                let fps = 1.0/delta
+                
+                // store frame in circular buffer
+                self.audioBufferLock.lock()
+                self.audioFrames[self.writeIndex] = outputSignalFrame
+                self.writeIndex = (self.writeIndex + 1) % self.audioBufferSize
+                self.availableFrames = min(self.availableFrames + 1, self.audioBufferSize)
+                self.audioBufferLock.unlock()
             }
-            
-            var normFactor = sigmoidNormalize(x: framePeak, M: self.runningMax)
-            normFactor = max(min(normFactor, 1.0), 0.0)
-            let outputSignalFrame = signal.map { $0 / (framePeak / normFactor) }
-            
-            self.lastFrame = outputSignalFrame
-            self.frameIndex = 0
-            
         }
     }
             
     // MARK: - Prepare for GPU processing
-    func computeTotalSpectrumGPU(amplitudeFrame: [Float], f0Frame: [Float], frequencies: [Float]) -> [Complex] {
+    func computeTotalSpectrumGPU(
+        amplitudeFrame: [Float],
+        f0Frame: [Float],
+        frequencies: [Float],
+        spectrumParams: SpectrumParams,
+        completion: @escaping ([Complex]) -> Void
+    ){
         let F = frequencies.count
         let P = amplitudeFrame.count
         
@@ -303,30 +376,23 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                                            options: [])
         
         var previous = previousSpectrum.map { simd_float2($0.real, $0.imag) }
+        
         let previousBuffer = device.makeBuffer(bytes: &previous, length: F * MemoryLayout<simd_float2>.size, options: [])
         
         var totalSumData = [simd_float2](repeating: simd_float2(0,0), count: F)
         let totalSumBuffer = device.makeBuffer(bytes: &totalSumData, length: F * MemoryLayout<simd_float2>.size, options: [])
-        
-        var params = SpectrumParams(
-            T: self.N / self.Hanning_Window_Multiplier,
-            Q_scaling: self.Q_scaling,
-            spectrumMixing: self.spectrumMixing,
-            P: UInt32(P),
-            F: UInt32(F),
-            hpCutoff: self.hpCutoff,
-            lpCutoff: self.lpCutoff,
-            hpOrder: self.hpOrder,
-            lpOrder: self.lpOrder
-        )
-        
+
+        var params = spectrumParams
         let paramBuffer = device.makeBuffer(bytes: &params,
                                             length: MemoryLayout<SpectrumParams>.stride,
                                             options: [])
         
         // Encode GPU command
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeComputeCommandEncoder() else { return [] }
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                  completion([])
+                  return
+              }
         
         encoder.setComputePipelineState(computePipeline)
         encoder.setBuffer(amplitudeBuffer, offset: 0, index: 0)
@@ -341,19 +407,38 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         let numThreadgroups = MTLSize(width: (F + 15) / 16, height: 1, depth: 1)
         
         encoder.dispatchThreadgroups(numThreadgroups, threadsPerThreadgroup: threadsPerThreadgroup)
-        
         encoder.endEncoding()
-        commandBuffer.commit()
-        
-        // Read back
-        let pointer = totalSumBuffer!.contents().bindMemory(to: simd_float2.self, capacity: F)
-        var result = [Complex]()
-        for i in 0..<F {
-            let val = pointer[i]
-            result.append(Complex(val.x, val.y))
+    
+        // Completion Handler
+        commandBuffer.addCompletedHandler { [weak self] _ in
+            guard let self = self else {return}
+            
+            // readback immediately
+            let ptr = totalSumBuffer!
+                .contents()
+                .bindMemory(to: simd_float2.self, capacity: F)
+            var result = [Complex]()
+            result.reserveCapacity(F)
+            for i in 0..<F {
+                result.append(Complex(ptr[i].x, ptr[i].y))
+            }
+            
+            // update dsp state on audio queue
+            self.audioQueue.async {
+                self.previousSpectrumDSP = result
+            }
+                
+            // update published spectrum on main queue
+            DispatchQueue.main.async {
+                self.previousSpectrum = result
+            }
+                
+            // call completion closure
+            completion(result)
         }
         
-        self.previousSpectrum = result
-        return result
+        commandBuffer.commit()
+        
     }
 }
+

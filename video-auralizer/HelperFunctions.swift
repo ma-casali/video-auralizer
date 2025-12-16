@@ -55,6 +55,11 @@ func linearToLog2(_ x: [Float], x0: Float = 20.0, x1: Float = 20_000.0, y0: Floa
     return x.map { m * log2($0 / x0) + y0 }
 }
 
+func linearToLog2Single(_ x: Float, x0: Float = 20.0, x1: Float = 20_000.0, y0: Float = 400.0, y1: Float = 790.0) -> Float {
+    let m = (y1 - y0) / log2(x1 / x0)
+    return m * log2(x / x0) + y0
+}
+
 // MARK: - LUT Storage
 private var f0LUT: [Float] = []
 private let lutSize = 256

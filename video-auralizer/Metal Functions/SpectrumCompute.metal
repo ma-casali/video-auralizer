@@ -85,10 +85,14 @@ kernel void computeSpectrum(device const float* amplitudeFrame [[buffer(0)]],
     }
     
     // High-pass / low-pass filters
-    if (freq <= params.hpCutoff)
-        sum *= float2(pow(fabs(freq - params.hpCutoff), -params.hpOrder), 0.0);
-    if (freq >= params.lpCutoff)
-        sum *= float2(pow(fabs(params.lpCutoff - freq), -params.lpOrder), 0.0);
+    if (freq <= params.hpCutoff) {
+        float gain = 2.0 / (1.0 + pow((params.hpCutoff - freq), params.hpOrder));
+        sum *= float2(gain, 0.0);
+    }
+    if (freq >= params.lpCutoff) {
+        float gain = 2.0 / (1.0 + pow((freq - params.lpCutoff), params.lpOrder));
+        sum *= float2(gain, 0.0);
+    }
     
     // Mix with previous spectrum
     float2 prev = previousSpectrum[fIdx];
