@@ -5,6 +5,7 @@ import MetalPerformanceShaders
 import Combine
 import simd
 import os
+import Accelerate
 
 struct AudioParams {
     let hpCutoff: Float
@@ -50,7 +51,8 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     // audio parameters
     private let sampleRate: Float32 = 44100.0
     private let videoFs: Float32 = 30.0
-    private var N: Float
+    private var NFFT: Int = 4096
+    private var N: Int
     private var F: Int
     @Published public var original_f: [Float] = []
     private var f: [Float] = []
@@ -66,12 +68,13 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     @Published public var lpCutoff: Float32 = 18_000.0
     @Published public var hpOrder: Float32 = 1.0
     @Published public var lpOrder: Float32 = 1.0
-    @Published public var downSample: Int = 16
+    @Published public var downSample: Int = 8
     var spectrumParams: SpectrumParams!  // persistent
     
     // history parameters
     private var previousSpectrumDSP: [Complex]
     @Published private(set) var previousSpectrum: [Complex]
+    @Published private(set) var previousSignal: [Float]
     private var runningMax: Float = 0.0
     
     // buffer parameters
@@ -84,16 +87,16 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     
     override init() {
         print("Initalizing VideoConverter...")
-        self.N = floor(sampleRate / videoFs)
-        print("N = \(self.N)")
-        let F_float: Float32 = floor(N / 2)
-        self.F = max(1, Int(F_float))
+        
+        print("NFFT = \(self.NFFT)")
+        self.N = self.NFFT - 2
+        self.F = max(1, self.N/2)
         self.previousSpectrum = [Complex](repeating: Complex(0,0), count: self.F)
         self.previousSpectrumDSP = [Complex](repeating: Complex(0,0), count: self.F)
+        self.previousSignal = [Float](repeating: 0, count: Int(self.N))
         
-        audioFrames = Array(repeating: [Float](repeating: 0, count: Int(N)), count: audioBufferSize)
+        self.audioFrames = Array(repeating: [Float](repeating: 0, count: NFFT), count: audioBufferSize)
 
-        
         super.init()
         
         self.original_f = linspace(start: Float(self.F) / sampleRate, end: sampleRate / 2 + Float(self.F) / sampleRate, num: self.F)
@@ -142,7 +145,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
             try AVAudioSession.sharedInstance().setActive(true)
-            try AVAudioSession.sharedInstance().setPreferredIOBufferDuration(Double(N)/44100.0)
+//            try AVAudioSession.sharedInstance().setPreferredIOBufferDuration(Double(N + 2)/44100.0)
             print("Audio session configured")
         } catch {
             print("Failed to configure audio session: \(error)")
@@ -153,36 +156,53 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         sourceNode = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
             guard let self = self else { return noErr }
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            
+
             self.audioBufferLock.lock()
-            
+
             for buffer in ablPointer {
                 let buf = buffer.mData!.assumingMemoryBound(to: Float.self)
-                var samplesWritten = 0
-                
+                var samplesWritten: Int = 0
+
                 while samplesWritten < Int(frameCount) {
                     if self.availableFrames == 0 {
-                        // no data ready: fill with zeros
-                        buf[samplesWritten] = 0.0
+                        // No data ready: fill remaining requested samples with zeros
+                        buf[ samplesWritten ] = 0.0
                         samplesWritten += 1
                         continue
                     }
-                    
+
                     let currentFrame = self.audioFrames[self.readIndex]
                     let frameSamples = currentFrame.count
-                    let samplesToCopy = min(frameSamples, Int(frameCount) - samplesWritten)
-                    
-                    buf.advanced(by: samplesWritten).update(from: currentFrame, count: samplesToCopy)
-                    
+
+                    // How many samples left to read from current frame
+                    let samplesRemainingInFrame = frameSamples - self.frameIndex
+
+                    // How many samples we can write in this callback
+                    let samplesToCopy = min(samplesRemainingInFrame, Int(frameCount) - samplesWritten)
+
+                    // Copy slice of current frame into audio buffer
+                    let slice = currentFrame[self.frameIndex ..< self.frameIndex + samplesToCopy]
+                    slice.withUnsafeBufferPointer { ptr in
+                        buf.advanced(by: samplesWritten).update(from: ptr.baseAddress!, count: samplesToCopy)
+                    }
+
+                    // Update counters
                     samplesWritten += samplesToCopy
-                    self.readIndex = (self.readIndex + 1) % self.audioBufferSize
-                    
-                    self.availableFrames -= 1
+                    self.frameIndex += samplesToCopy
+
+                    if self.frameIndex >= frameSamples {
+                        // Finished reading current frame → move to next frame
+                        self.frameIndex = 0
+                        self.readIndex = (self.readIndex + 1) % self.audioBufferSize
+                        self.availableFrames -= 1
+                    }
                 }
             }
+
             self.audioBufferLock.unlock()
             return noErr
         }
+
         
         audioEngine.attach(sourceNode)
         audioEngine.connect(sourceNode, to: audioEngine.mainMixerNode, format: format)
@@ -249,8 +269,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
 //    private let audioFrameLock = OSAllocatedUnfairLock()
 //    private var readFromA: Bool = true
     
-    private var lastFrameTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
-    
     // MARK: - Process a frame of audio
     private func processFrame(texture: MTLTexture) {
         audioQueue.async { [weak self] in
@@ -301,7 +319,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
            }
             
             let spectrumParams = SpectrumParams(
-                T: self.N / audioParams.Hanning_Window_Multiplier,
+                T: Float(self.N) / audioParams.Hanning_Window_Multiplier,
                 Q_scaling: audioParams.Q_scaling,
                 spectrumMixing: audioParams.spectrumMixing,
                 P: UInt32(P),
@@ -320,6 +338,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                 spectrumParams: spectrumParams
             ) { totalSpectrum in
                 // Mirror and conjugate
+                
                 let fullSpectrum = mirrorAndConjugate(totalSpectrum)
                 
                 // Take the IFFT
@@ -336,19 +355,25 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                 var normFactor = sigmoidNormalize(x: framePeak, M: self.runningMax)
                 normFactor = max(min(normFactor, 1.0), 0.0)
                 let outputSignalFrame = signal.map { $0 / (framePeak / normFactor) }
+
                 
-                let now = CFAbsoluteTimeGetCurrent()
-                let delta = now - self.lastFrameTime
-                self.lastFrameTime = now
-                
-                let fps = 1.0/delta
-                
-                // store frame in circular buffer
+                DispatchQueue.main.async {
+                    self.previousSignal = outputSignalFrame
+                }
+
+                // Store frame in circular buffer safely
                 self.audioBufferLock.lock()
-                self.audioFrames[self.writeIndex] = outputSignalFrame
-                self.writeIndex = (self.writeIndex + 1) % self.audioBufferSize
-                self.availableFrames = min(self.availableFrames + 1, self.audioBufferSize)
-                self.audioBufferLock.unlock()
+                defer { self.audioBufferLock.unlock() }
+
+                // Only overwrite if there is room (avoid overwriting unread frames)
+                if self.availableFrames < self.audioBufferSize {
+                    self.audioFrames[self.writeIndex] = outputSignalFrame
+                    self.writeIndex = (self.writeIndex + 1) % self.audioBufferSize
+                    self.availableFrames += 1
+                } else {
+                    // Buffer full: drop frame or handle as needed
+                    print("Warning: Audio buffer full, dropping frame")
+                }
             }
         }
     }

@@ -109,21 +109,25 @@ func lookupF0(r: Int, g: Int, b: Int) -> Float {
 }
 
 // MARK: - Mirror & Conjugate
-func mirrorAndConjugate(_ spec: [Complex]) -> [DSPComplex] {
-    let N = spec.count
-    var out = [DSPComplex](repeating: DSPComplex(real: 0, imag: 0), count: 2*N+1)
+func mirrorAndConjugate(_ half: [Complex]) -> [DSPComplex] {
+    let F = half.count // number of bins from frequency sampling
+    let NFFT = 2 * (F + 1)
     
-    for i in 0..<N {
-        let c = spec[i]
-        out[i+1] = DSPComplex(real: c.real, imag: c.imag)
+    var full = [DSPComplex](repeating: DSPComplex(real: 0, imag: 0), count: NFFT)
+    
+    // DC bin
+    full[0] = DSPComplex(real: 0, imag: 0)
+    
+    for k in 0..<F {
+        let c = half[k]
+        full[k+1] = DSPComplex(real: c.real, imag: c.imag) // Positive frequencies
+        full[NFFT - (k + 1)] = DSPComplex(real: c.real, imag: -c.imag) // Negative frequencies
     }
     
-    for i in 0..<N {
-        let c = spec[N-1-i].conjugate
-        out[N+1+i] = DSPComplex(real: c.real, imag: c.imag)
-    }
+    // Nyquist bin
+    full[F + 1] = DSPComplex(real: 0, imag: 0)
     
-    return out
+    return full
 }
 
 // MARK: - Sigmoid Normalization

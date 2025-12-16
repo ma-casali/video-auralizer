@@ -25,6 +25,10 @@ struct AuralizerView: View {
                 .cornerRadius(12)
                 .shadow(radius: 5)
             
+            TimeDomainFrameView(converter: converter)
+                .frame(height: 150)
+                .padding(.horizontal, 10)
+            
             // --- Spectrum analyzer & color bar ---
             ZStack {
                 SpectrumView(converter: converter)
