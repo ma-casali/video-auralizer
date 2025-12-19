@@ -4,8 +4,6 @@ import Metal
 import MetalPerformanceShaders
 import Combine
 import simd
-import os
-import Accelerate
 
 struct AudioParams {
     let hpCutoff: Float
@@ -56,7 +54,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private var F: Int
     @Published public var original_f: [Float] = []
     private var f: [Float] = []
-    private var outputSignal: [Float] = []
     
     // future controllable parameters
     @Published public var attack: Float32 = 0.25
@@ -69,13 +66,13 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     @Published public var hpOrder: Float32 = 1.0
     @Published public var lpOrder: Float32 = 1.0
     @Published public var downSample: Int = 8
-    var spectrumParams: SpectrumParams!  // persistent
     
     // history parameters
     private var previousSpectrumDSP: [Complex]
     @Published private(set) var previousSpectrum: [Complex]
     @Published private(set) var previousSignal: [Float]
     private var runningMax: Float = 0.0
+    private var lastRGBFrame: [(r: UInt8, g: UInt8, b: UInt8)]?
     
     // buffer parameters
     private let audioBufferSize = 16
@@ -101,7 +98,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         
         self.original_f = linspace(start: Float(self.F) / sampleRate, end: sampleRate / 2 + Float(self.F) / sampleRate, num: self.F)
         self.f = linearToLog2(self.original_f)
-        self.outputSignal = [Float](repeating: 0.0, count: Int(self.N))
         
         loadFrequencyLUT()
         setupMetal()
@@ -145,7 +141,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
             try AVAudioSession.sharedInstance().setActive(true)
-//            try AVAudioSession.sharedInstance().setPreferredIOBufferDuration(Double(N + 2)/44100.0)
             print("Audio session configured")
         } catch {
             print("Failed to configure audio session: \(error)")
@@ -264,11 +259,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         }
     }
     
-//    private var audioFrameA = [Float]()
-//    private var audioFrameB = [Float]()
-//    private let audioFrameLock = OSAllocatedUnfairLock()
-//    private var readFromA: Bool = true
-    
     // MARK: - Process a frame of audio
     private func processFrame(texture: MTLTexture) {
         audioQueue.async { [weak self] in
@@ -279,31 +269,55 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             // --- GPU -> CPU copy ---
             let width = texture.width
             let height = texture.height
-            let widthArray = Array(stride(from: 0, to: height, by: self.downSample))
-            let heightArray = Array(stride(from: 0, to: width, by: self.downSample))
-            let bytesPerRow = 4 * widthArray.count
-            let pixelData = UnsafeMutableRawPointer.allocate(byteCount: bytesPerRow * heightArray.count, alignment: 1)
+            let bytesPerRow = 4 * width
+            let pixelData = UnsafeMutableRawPointer.allocate(byteCount: bytesPerRow * height, alignment: 1)
             defer { pixelData.deallocate() }
             
-            let region = MTLRegionMake2D(0, 0, widthArray.count, heightArray.count)
+            let region = MTLRegionMake2D(0, 0, width, height)
             texture.getBytes(pixelData, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
             
             // Extract RGB array
             var rgbArray: [(r: UInt8, g: UInt8, b: UInt8)] = []
             let ptr = pixelData.assumingMemoryBound(to: UInt8.self)
-            for y in heightArray {
+            for y in stride(from: 0, to: height, by: self.downSample) {
                 let row = ptr + y * bytesPerRow
-                for x in widthArray {
+                for x in stride(from: 0, to: width, by: self.downSample) {
                     let pixel = row + x * 4
                     rgbArray.append((r: pixel[2], g: pixel[1], b: pixel[0]))
                 }
             }
+
+            let previousRGB = lastRGBFrame
+            lastRGBFrame = rgbArray
             
             // Generate amplitude and f0
             let eps: Float = 1e-9
-            let amplitudeFrame: [Float] = rgbArray.map { max(Float(max($0.r, $0.g, $0.b)) / 255.0, eps) }
+            var amplitudeFrame: [Float] = []
+            amplitudeFrame.reserveCapacity(rgbArray.count)
+            
+            for i in 0..<rgbArray.count {
+                let curr = rgbArray[i]
+                
+                let r = Int(curr.r)
+                let g = Int(curr.g)
+                let b = Int(curr.b)
+                
+                var delta: Float = 0.0
+                if let prev = previousRGB {
+                    let p = prev[i]
+                    let dr = r - Int(p.r)
+                    let dg = g - Int(p.g)
+                    let db = b - Int(p.b)
+                    delta = Float(dr + dg + db) / (3.0 * 255.0)
+                }
+                let brightness = Float(max(r, max(g, b))) / 255.0
+                let amplitude = pow(10.0, brightness * (0.2 + 0.8 * delta))
+                
+                amplitudeFrame.append(max(amplitude, eps))
+            }
+            
+            
             let f0Frame: [Float] = rgbArray.map { lookupF0(r: Int($0.r), g: Int($0.g), b: Int($0.b)) }
-
             let P = amplitudeFrame.count
             
            self.paramsQueue.async(flags: .barrier) {
@@ -370,9 +384,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                     self.audioFrames[self.writeIndex] = outputSignalFrame
                     self.writeIndex = (self.writeIndex + 1) % self.audioBufferSize
                     self.availableFrames += 1
-                } else {
-                    // Buffer full: drop frame or handle as needed
-                    print("Warning: Audio buffer full, dropping frame")
                 }
             }
         }

@@ -105,8 +105,3 @@ struct WindowReader: UIViewRepresentable {
         }
     }
 }
-
-#Preview{
-    AuralizerView()
-        .environmentObject(VideoConverter())
-}

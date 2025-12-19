@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct HomeView: View {
+    @EnvironmentObject var converter: VideoConverter
 
     var body: some View {
         NavigationStack{
@@ -18,7 +19,7 @@ struct HomeView: View {
                     .padding()
                     .multilineTextAlignment(.center)
                 
-                NavigationLink(destination: AuralizerView().environmentObject(VideoConverter()) ){
+                NavigationLink(destination: AuralizerView() ){
                     Text("Begin Auralization")
                     .foregroundColor(.white)
                     .padding()
