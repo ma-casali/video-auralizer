@@ -42,11 +42,12 @@ inline float sinc(float x) {
 
 // --- Kernel ---
 kernel void computeSpectrum(device const float* amplitudeFrame [[buffer(0)]],
-                            device const float* f0Frame [[buffer(1)]],
-                            device const float* frequencies [[buffer(2)]],
-                            device const float2* previousSpectrum [[buffer(3)]],
-                            device float2* totalSum [[buffer(4)]],
-                            constant SpectrumParams& params [[buffer(5)]],
+                            device const float* QFrame [[buffer(1)]],
+                            device const float* f0Frame [[buffer(2)]],
+                            device const float* frequencies [[buffer(3)]],
+                            device const float2* previousSpectrum [[buffer(4)]],
+                            device float2* totalSum [[buffer(5)]],
+                            constant SpectrumParams& params [[buffer(6)]],
                             uint fIdx [[thread_position_in_grid]])
 {
     if (fIdx >= params.F) return;
