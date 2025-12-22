@@ -58,6 +58,7 @@ kernel void computeSpectrum(device const float* amplitudeFrame [[buffer(0)]],
     for (uint32_t p = 0; p < params.P; ++p) {
         float f0 = f0Frame[p];
         float A = amplitudeFrame[p];
+        float Q_scale = QFrame[p];
         
         float diffPos = freq - f0;
         float diffNeg = freq + f0;
@@ -75,7 +76,7 @@ kernel void computeSpectrum(device const float* amplitudeFrame [[buffer(0)]],
         
         float2 value = complexMul(float2(0.0, -0.5), float2(WPos - WNeg, 0.0));
         
-        float Q = f0 / (A * 255.0) * params.Q_scaling;
+        float Q = Q_scale / A;
         float2 denom = float2(1.0, Q * (freq - f0));
         float2 resonantPeak = complexDiv(float2(1.0, 0.0), denom);
         

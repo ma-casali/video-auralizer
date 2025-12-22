@@ -42,19 +42,25 @@ struct Modes {
 
 final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     
+    // MARK: - Define class parameters
+    
+    // MARK: - Setup Queues
+    private let audioQueue = DispatchQueue(label: "audioQueue") // serialize audio buffer scheduling
+    private let paramsQueue = DispatchQueue(label: "paramsQueue", attributes: .concurrent)
+    
+    // audio format parameters
     private let audioEngine = AVAudioEngine()
     private var sourceNode: AVAudioSourceNode!
-    private var frameIndex: Int = 0
     private var audioFormat: AVAudioFormat!
+    private var frameIndex: Int = 0
     
+    // metal parameters
     private var device: MTLDevice!
     private var commandQueue: MTLCommandQueue!
     private var textureCache: CVMetalTextureCache!
     private var computePipeline: MTLComputePipelineState!
     private var fusedPipeline: MTLComputePipelineState?
-    var metalBuffer: MTLBuffer!
     private var modesBuffer: MTLBuffer?
-    
     private var mipTexture: MTLTexture?
     
     // audio parameters
@@ -65,8 +71,17 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private var F: Int
     @Published public var original_f: [Float] = []
     private var f: [Float] = []
+    private var currentAudioParams = AudioParams(
+        hpCutoff: 400.0, // color spectrum frequency
+        lpCutoff: 790.0, // color spectrum frequency
+        hpOrder: 1.0,
+        lpOrder: 1.0,
+        Q_scaling: 1.0,
+        spectrumMixing: 0.85,
+        Hanning_Window_Multiplier: 1.0
+    )
     
-    // future controllable parameters
+    // controllable parameters
     @Published public var attack: Float32 = 0.25
     @Published public var release: Float32 = 0.25
     @Published public var spectrumMixing: Float32 = 0.9
@@ -78,6 +93,12 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     @Published public var lpOrder: Float32 = 1.0
     @Published public var currentMipLevel: Int = 3
     
+    // controllable parameters not implemented yet
+    @Published public var peakAlpha:            Float32 = 1.0
+    @Published public var saddleAlpha:          Float32 = 1.0
+    @Published public var vertGradientAlpha:    Float32 = 1.0
+    @Published public var horzGradientAlpha:    Float32 = 1.0
+    
     // history parameters
     private var previousSpectrumDSP: [Complex]
     @Published private(set) var previousSpectrum: [Complex]
@@ -86,6 +107,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private var lastRGBFrame: [(r: UInt8, g: UInt8, b: UInt8)]?
     
     // buffer parameters
+    var metalBuffer: MTLBuffer!
     private let audioBufferSize = 16
     private var audioFrames: [[Float]] = []
     private var writeIndex = 0
@@ -93,16 +115,16 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private var availableFrames = 0
     private let audioBufferLock = NSLock()
     
+    // MARK: - Initialization
     override init() {
         print("Initalizing VideoConverter...")
-        
         print("NFFT = \(self.NFFT)")
+        
         self.N = self.NFFT - 2
         self.F = max(1, self.N/2)
         self.previousSpectrum = [Complex](repeating: Complex(0,0), count: self.F)
         self.previousSpectrumDSP = [Complex](repeating: Complex(0,0), count: self.F)
         self.previousSignal = [Float](repeating: 0, count: Int(self.N))
-        
         self.audioFrames = Array(repeating: [Float](repeating: 0, count: NFFT), count: audioBufferSize)
 
         super.init()
@@ -143,11 +165,14 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     // MARK: - Metal Compute Setup
     private func setupMetalCompute() {
         guard let library = device.makeDefaultLibrary() else {return}
-        guard let kernel = library.makeFunction(name: "computeSpectrum") else { return }
-        guard let fusedKernel = library.makeFunction(name: "computeOrthogonalModesFromTexture") else {return}
         
-        computePipeline = try? device.makeComputePipelineState(function: kernel)
+        // rgb to hsi values computation
+        guard let fusedKernel = library.makeFunction(name: "computeOrthogonalModesFromTexture") else {return}
         fusedPipeline = try? device.makeComputePipelineState(function: fusedKernel)
+        
+        // spectrum computation
+        guard let kernel = library.makeFunction(name: "computeSpectrum") else { return }
+        computePipeline = try? device.makeComputePipelineState(function: kernel)
     }
     
     // MARK: - Audio Setup
@@ -180,16 +205,12 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                         continue
                     }
 
+                    // send samples to buffer
                     let currentFrame = self.audioFrames[self.readIndex]
                     let frameSamples = currentFrame.count
-
-                    // How many samples left to read from current frame
                     let samplesRemainingInFrame = frameSamples - self.frameIndex
-
-                    // How many samples we can write in this callback
                     let samplesToCopy = min(samplesRemainingInFrame, Int(frameCount) - samplesWritten)
 
-                    // Copy slice of current frame into audio buffer
                     let slice = currentFrame[self.frameIndex ..< self.frameIndex + samplesToCopy]
                     slice.withUnsafeBufferPointer { ptr in
                         buf.advanced(by: samplesWritten).update(from: ptr.baseAddress!, count: samplesToCopy)
@@ -212,7 +233,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             return noErr
         }
 
-        
         audioEngine.attach(sourceNode)
         audioEngine.connect(sourceNode, to: audioEngine.mainMixerNode, format: format)
         
@@ -225,7 +245,6 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     }
     
     // MARK: - Capture Output
-    // MARK: - Capture Output
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
@@ -234,14 +253,15 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
             let device = self.device,
             let commandQueue = self.commandQueue
-        else { return }
+        else {
+            print("Pixel buffer, device, or commandQueue not initialized properly.")
+            return
+        }
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
 
-        // --------------------------------------------------
         // Create Metal texture from camera pixel buffer
-        // --------------------------------------------------
         var cvTextureOut: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
             nil,
@@ -261,9 +281,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             let cameraTexture = CVMetalTextureGetTexture(cvTexture)
         else { return }
 
-        // --------------------------------------------------
         // Create or resize mipmapped texture if needed
-        // --------------------------------------------------
         let needsNewTexture =
             mipTexture == nil ||
             mipTexture!.width != width ||
@@ -285,15 +303,13 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
 
         guard let mipTexture = mipTexture else { return }
 
-        // --------------------------------------------------
         // GPU copy + mipmap generation
-        // --------------------------------------------------
         guard
             let commandBuffer = commandQueue.makeCommandBuffer(),
             let blit = commandBuffer.makeBlitCommandEncoder()
         else { return }
 
-        // Copy camera frame → mip level 0
+        // Copy camera frame
         blit.copy(
             from: cameraTexture,
             sourceSlice: 0,
@@ -302,7 +318,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             sourceSize: .init(width: width, height: height, depth: 1),
             to: mipTexture,
             destinationSlice: 0,
-            destinationLevel: 0,
+            destinationLevel: self.currentMipLevel,
             destinationOrigin: .init(x: 0, y: 0, z: 0)
         )
 
@@ -320,27 +336,13 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
 
         commandBuffer.commit()
     }
-
-    // MARK: - Setup Queues
-    private let audioQueue = DispatchQueue(label: "audioQueue") // serialize audio buffer scheduling
-    private let paramsQueue = DispatchQueue(label: "paramsQueue", attributes: .concurrent)
-    
-    private var currentAudioParams = AudioParams(
-        hpCutoff: 400.0, // color spectrum frequency
-        lpCutoff: 790.0, // color spectrum frequency
-        hpOrder: 1.0,
-        lpOrder: 1.0,
-        Q_scaling: 1.0,
-        spectrumMixing: 0.85,
-        Hanning_Window_Multiplier: 1.0
-    )
     
     func setAudioParams(_ newParams: AudioParams){
         paramsQueue.async(flags: .barrier) {
             self.currentAudioParams = newParams
         }
     }
-    
+
     // MARK: - Process a frame of audio
     private func processFrame(texture: MTLTexture) {
         audioQueue.async { [weak self] in
@@ -349,21 +351,19 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             // Grab audio parameters
             let audioParams: AudioParams = self.paramsQueue.sync { self.currentAudioParams }
             
+            // downsample pixel grid according to mip level
             let width = texture.width
             let height = texture.height
             let mipWidth = width >> self.currentMipLevel
             let mipHeight = height >> self.currentMipLevel
             let mipPixelCount = mipWidth * mipHeight
-            
             let requiredLength = mipPixelCount * MemoryLayout<Modes>.stride
-            
-            
+
+            // set up output buffer for GPU compute
             if modesBuffer == nil || modesBuffer!.length < requiredLength {
                 modesBuffer = device.makeBuffer(length: requiredLength, options: .storageModeShared)
             }
-            
             guard let modesBuffer = modesBuffer else { return }
-
             guard let commandBuffer = self.commandQueue.makeCommandBuffer(),
                   let computeEncoder = commandBuffer.makeComputeCommandEncoder(),
                   let fusedPipeline = self.fusedPipeline else {
@@ -371,6 +371,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                 return
             }
           
+            // encode bytes for GPU compute
             computeEncoder.setComputePipelineState(fusedPipeline)
             computeEncoder.setTexture(texture, index: 0)
             computeEncoder.setBuffer(modesBuffer, offset: 0, index: 0)
@@ -395,8 +396,10 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                 let modesPointer = modesBuffer.contents().bindMemory(to: Modes.self, capacity: mipPixelCount)
                 let modesArray: [Modes] = Array(UnsafeBufferPointer(start: modesPointer, count: mipPixelCount))
                 
-                let amplitudeFrame = modesArray.map { 255.0 * Float($0.I_c.x + $0.I.x + $0.I.y + $0.I.z + $0.I.w) }
-                let QFrame = modesArray.map{ Float(pow(10.0, $0.S_c.x + $0.S.x + $0.S.y + $0.S.z + $0.S.w)) }
+                // implement orthogonal alterations to amplitude and Q
+                let amplitudeFrame = modesArray.map { Float(1.0/(1.0 + exp(-10 * ($0.I_c.x + $0.I.x + $0.I.y + $0.I.z + $0.I.w)))) }
+                let Qsigmoid = modesArray.map{ Float(4.0/(1.0 + exp(-2 * ($0.S_c.x + $0.S.x + $0.S.y + $0.S.z + $0.S.w)))) - 2.0 }
+                let QFrame = Qsigmoid.map { Float(pow(10.0, $0)) }
                 let f0Frame = modesArray.map{ Float($0.f0.x) }
                 
                 self.paramsQueue.async(flags: .barrier) {
@@ -411,7 +414,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                     )
                 }
                  
-                 let spectrumParams = SpectrumParams(
+                let spectrumParams = SpectrumParams(
                      T: Float(self.N) / audioParams.Hanning_Window_Multiplier,
                      Q_scaling: audioParams.Q_scaling,
                      spectrumMixing: audioParams.spectrumMixing,
@@ -432,13 +435,10 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                      spectrumParams: spectrumParams
                  ) { totalSpectrum in
                      // Mirror and conjugate
-                     
                      let fullSpectrum = mirrorAndConjugate(totalSpectrum)
                      
                      // Take the IFFT
                      let signal = iFFT(fullSpectrum)
-                     
-                     print("First 5 items of signal: \(signal.prefix(5))")
                      
                      // Normalize using sigmoid
                      let eps = 1e-9
@@ -448,11 +448,9 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                      } else {
                          self.runningMax = self.release * framePeak + (1.0 - self.release) * self.runningMax
                      }
-                     
                      var normFactor = sigmoidNormalize(x: framePeak, M: self.runningMax)
                      normFactor = max(min(normFactor, 1.0), 0.0)
                      let outputSignalFrame = signal.map { $0 / (framePeak / normFactor) }
-
                      
                      DispatchQueue.main.async {
                          self.previousSignal = outputSignalFrame

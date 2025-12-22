@@ -86,8 +86,6 @@ func loadFrequencyLUT() {
                 f0LUT[i] = floatPtr[i]
             }
         }
-        print("Frequency LUT loaded with \(f0LUT.count) entries ✅")
-        
     } catch {
         print("Failed to load LUT: \(error)")
     }
