@@ -93,11 +93,11 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     @Published public var lpOrder: Float32 = 1.0
     @Published public var currentMipLevel: Int = 3
     
-    // controllable parameters not implemented yet
-    @Published public var peakAlpha:            Float32 = 1.0
-    @Published public var saddleAlpha:          Float32 = 1.0
-    @Published public var vertGradientAlpha:    Float32 = 1.0
-    @Published public var horzGradientAlpha:    Float32 = 1.0
+    // mode emphasis control
+    @Published public var breathingMode: Float = 1.0
+    @Published public var verticalTiltMode: Float = 1.0
+    @Published public var horizontalTiltMode: Float = 1.0
+    @Published public var shearMode: Float = 1.0
     
     // history parameters
     private var previousSpectrumDSP: [Complex]
@@ -396,11 +396,18 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                 let modesPointer = modesBuffer.contents().bindMemory(to: Modes.self, capacity: mipPixelCount)
                 let modesArray: [Modes] = Array(UnsafeBufferPointer(start: modesPointer, count: mipPixelCount))
                 
-                // implement orthogonal alterations to amplitude and Q
-                let amplitudeFrame = modesArray.map { Float(1.0/(1.0 + exp(-10 * ($0.I_c.x + $0.I.x + $0.I.y + $0.I.z + $0.I.w)))) }
-                let Qsigmoid = modesArray.map{ Float(4.0/(1.0 + exp(-2 * ($0.S_c.x + $0.S.x + $0.S.y + $0.S.z + $0.S.w)))) - 2.0 }
-                let QFrame = Qsigmoid.map { Float(pow(10.0, $0)) }
+                let amplitudeFrame = modesArray.map { 255.0 * (Float($0.I_c.x) +
+                                                            Float($0.I.x * self.breathingMode) +
+                                                            Float($0.I.y * self.verticalTiltMode) +
+                                                            Float($0.I.z * self.horizontalTiltMode) +
+                                                            Float($0.I.w * self.shearMode)) }
+                let QFrame = modesArray.map{ pow(10.0, Float($0.S_c.x) +
+                                                       Float($0.S.x * self.breathingMode) +
+                                                       Float($0.S.y * self.verticalTiltMode) +
+                                                       Float($0.S.z * self.horizontalTiltMode) +
+                                                       Float($0.S.w * self.shearMode)) }
                 let f0Frame = modesArray.map{ Float($0.f0.x) }
+
                 
                 self.paramsQueue.async(flags: .barrier) {
                     self.currentAudioParams = AudioParams(
