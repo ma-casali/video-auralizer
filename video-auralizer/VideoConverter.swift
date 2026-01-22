@@ -4,6 +4,7 @@ import Metal
 import MetalPerformanceShaders
 import Combine
 import simd
+import Accelerate
 
 struct AudioParams {
     let hpCutoff: Float
@@ -32,12 +33,11 @@ struct SpectrumParams {
     let padding2: UInt32 = 0        // pad to 16 bytes
 }
 
-struct Modes {
-    var I_c: SIMD2<Float>
-    var S_c: SIMD2<Float>
-    var I: SIMD4<Float>
-    var S: SIMD4<Float>
-    var f0: SIMD4<Float>
+struct ModeMultipliers {
+    var breathing: Float
+    var verticalTilt: Float
+    var horizontalTilt: Float
+    var shear: Float
 }
 
 final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -318,7 +318,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             sourceSize: .init(width: width, height: height, depth: 1),
             to: mipTexture,
             destinationSlice: 0,
-            destinationLevel: self.currentMipLevel,
+            destinationLevel: 0,
             destinationOrigin: .init(x: 0, y: 0, z: 0)
         )
 
@@ -357,14 +357,15 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             let mipWidth = width >> self.currentMipLevel
             let mipHeight = height >> self.currentMipLevel
             let mipPixelCount = mipWidth * mipHeight
-            let requiredLength = mipPixelCount * MemoryLayout<Modes>.stride
+            let requiredLength = mipPixelCount * MemoryLayout<Float>.stride
 
             // set up output buffer for GPU compute
-            if modesBuffer == nil || modesBuffer!.length < requiredLength {
-                modesBuffer = device.makeBuffer(length: requiredLength, options: .storageModeShared)
-            }
-            guard let modesBuffer = modesBuffer else { return }
-            guard let commandBuffer = self.commandQueue.makeCommandBuffer(),
+            let ampBuf = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
+            let qBuf = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
+            let f0Buf = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
+            
+            guard let ampBuf = ampBuf, let qBuf = qBuf, let f0Buf = f0Buf,
+                  let commandBuffer = self.commandQueue.makeCommandBuffer(),
                   let computeEncoder = commandBuffer.makeComputeCommandEncoder(),
                   let fusedPipeline = self.fusedPipeline else {
                 print("Failed to create command buffer, encoder, or pipeline")
@@ -374,15 +375,25 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             // encode bytes for GPU compute
             computeEncoder.setComputePipelineState(fusedPipeline)
             computeEncoder.setTexture(texture, index: 0)
-            computeEncoder.setBuffer(modesBuffer, offset: 0, index: 0)
+            computeEncoder.setBuffer(ampBuf, offset: 0, index: 0)
+            computeEncoder.setBuffer(qBuf, offset: 0, index: 1)
+            computeEncoder.setBuffer(f0Buf, offset: 0, index: 2)
             
             var w = UInt32(mipWidth)
             var h = UInt32(mipHeight)
             assert(self.currentMipLevel < texture.mipmapLevelCount)
             var mipLevel = UInt32(self.currentMipLevel)
-            computeEncoder.setBytes(&w, length: 4, index: 1)
-            computeEncoder.setBytes(&h, length: 4, index: 2)
-            computeEncoder.setBytes(&mipLevel, length: 4, index: 3)
+            computeEncoder.setBytes(&w, length: 4, index: 3)
+            computeEncoder.setBytes(&h, length: 4, index: 4)
+            computeEncoder.setBytes(&mipLevel, length: 4, index: 5)
+            
+            var multipliers = ModeMultipliers(
+                breathing: self.breathingMode,
+                verticalTilt: self.verticalTiltMode,
+                horizontalTilt: self.horizontalTiltMode,
+                shear: self.shearMode
+            )
+            computeEncoder.setBytes(&multipliers, length: MemoryLayout<ModeMultipliers>.size, index: 6)
             
             let wtg = min(device.maxThreadsPerThreadgroup.width, 16)
             let htg = min(device.maxThreadsPerThreadgroup.height, 16)
@@ -393,21 +404,10 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             computeEncoder.endEncoding()
             
             commandBuffer.addCompletedHandler { _ in
-                let modesPointer = modesBuffer.contents().bindMemory(to: Modes.self, capacity: mipPixelCount)
-                let modesArray: [Modes] = Array(UnsafeBufferPointer(start: modesPointer, count: mipPixelCount))
-                
-                let amplitudeFrame = modesArray.map { 255.0 * (Float($0.I_c.x) +
-                                                            Float($0.I.x * self.breathingMode) +
-                                                            Float($0.I.y * self.verticalTiltMode) +
-                                                            Float($0.I.z * self.horizontalTiltMode) +
-                                                            Float($0.I.w * self.shearMode)) }
-                let QFrame = modesArray.map{ pow(10.0, Float($0.S_c.x) +
-                                                       Float($0.S.x * self.breathingMode) +
-                                                       Float($0.S.y * self.verticalTiltMode) +
-                                                       Float($0.S.z * self.horizontalTiltMode) +
-                                                       Float($0.S.w * self.shearMode)) }
-                let f0Frame = modesArray.map{ Float($0.f0.x) }
 
+                let amplitudeFrame = Array(UnsafeBufferPointer(start: ampBuf.contents().assumingMemoryBound(to: Float.self), count: mipPixelCount))
+                let QFrame = Array(UnsafeBufferPointer(start: qBuf.contents().assumingMemoryBound(to: Float.self), count: mipPixelCount))
+                let f0Frame = Array(UnsafeBufferPointer(start: f0Buf.contents().assumingMemoryBound(to: Float.self), count: mipPixelCount))
                 
                 self.paramsQueue.async(flags: .barrier) {
                     self.currentAudioParams = AudioParams(
@@ -457,7 +457,11 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                      }
                      var normFactor = sigmoidNormalize(x: framePeak, M: self.runningMax)
                      normFactor = max(min(normFactor, 1.0), 0.0)
-                     let outputSignalFrame = signal.map { $0 / (framePeak / normFactor) }
+                     let normValue = framePeak / normFactor
+                     var outputSignalFrame = [Float](repeating: 0, count: signal.count)
+                     if normValue != 0 {
+                         vDSP.divide(signal, normValue, result: &outputSignalFrame)
+                     }
                      
                      DispatchQueue.main.async {
                          self.previousSignal = outputSignalFrame

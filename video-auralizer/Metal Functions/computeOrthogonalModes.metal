@@ -3,21 +3,23 @@ using namespace metal;
 
 #define M_PI 3.14159265358979323846
 
-struct Modes {
-    float2 I_c;
-    float2 S_c;
-    float4 I;
-    float4 S;
-    float4 f0;
+struct ModeMultipliers {
+    float breathing;
+    float verticalTilt;
+    float horizontalTilt;
+    float shear;
 };
 
 // Fused kernel: RGB → HSI → Orthogonal Modes (with mipmaps)
 kernel void computeOrthogonalModesFromTexture(
     texture2d<float, access::sample> inTexture [[texture(0)]],
-    device Modes*                    modeOut   [[buffer(0)]],
-    constant uint&                   width     [[buffer(1)]],
-    constant uint&                   height    [[buffer(2)]],
-    constant uint&                   mipLevel  [[buffer(3)]],
+    device float* amplitudeOut [[buffer(0)]],
+    device float* qFrameOut [[buffer(1)]],
+    device float* f0Out [[buffer(2)]],
+    constant uint& width [[buffer(3)]],
+    constant uint& height [[buffer(4)]],
+    constant uint& mipLevel [[buffer(5)]],
+    constant ModeMultipliers& modes [[buffer(6)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     // --------------------------------------------------
@@ -119,14 +121,29 @@ kernel void computeOrthogonalModesFromTexture(
     float S_M2  = invSqrt2 * (dS_N - dS_S);
     float S_M3  = invSqrt2 * (dS_E - dS_W);
     float S_M4  = 0.5f      * (dS_N - dS_E + dS_S - dS_W);
+    
+    
+    // ----------------------------------------
+    // Map modes to A, Q, and f0
+    // ----------------------------------------
+    
+    float finalAmp = 255.0f * (I_c +
+                               I_M1 * modes.breathing +
+                               I_M2 * modes.verticalTilt +
+                               I_M3 * modes.horizontalTilt +
+                               I_M4 * modes.shear);
+    
+    float qExp = (S_c +
+                  S_M1 * modes.breathing +
+                  S_M2 * modes.verticalTilt +
+                  S_M3 * modes.horizontalTilt +
+                  S_M4 * modes.shear);
 
     // ----------------------------------------
     // Write output
     // ----------------------------------------
-    modeOut[idx].I_c = float2(I_c, 0.0);
-    modeOut[idx].S_c = float2(S_c, 0.0);
-    modeOut[idx].I  = float4(I_M1,  I_M2,  I_M3,  I_M4);
-    modeOut[idx].S  = float4(S_M1,  S_M2,  S_M3,  S_M4);
-    modeOut[idx].f0 = float4(f0_c, f0_c, f0_c, f0_c);
+    amplitudeOut[idx] = max(0.0f, finalAmp);
+    qFrameOut[idx] = pow(10.0f, clamp(qExp, -2.0f, 2.0f));
+    f0Out[idx] = f0_c;
 }
 

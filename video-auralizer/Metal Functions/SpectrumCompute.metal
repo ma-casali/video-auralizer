@@ -57,7 +57,7 @@ kernel void computeSpectrum(device const float* amplitudeFrame [[buffer(0)]],
     
     for (uint32_t p = 0; p < params.P; ++p) {
         float f0 = f0Frame[p];
-        float A = amplitudeFrame[p];
+        float A = max(amplitudeFrame[p], 1e-6f);
         float Q_scale = QFrame[p];
         
         float diffPos = freq - f0;
@@ -76,7 +76,7 @@ kernel void computeSpectrum(device const float* amplitudeFrame [[buffer(0)]],
         
         float2 value = complexMul(float2(0.0, -0.5), float2(WPos - WNeg, 0.0));
         
-        float Q = Q_scale / A;
+        float Q = clamp(Q_scale / A, 0.0f, 1000.0f);
         float2 denom = float2(1.0, Q * (freq - f0));
         float2 resonantPeak = complexDiv(float2(1.0, 0.0), denom);
         
@@ -88,11 +88,11 @@ kernel void computeSpectrum(device const float* amplitudeFrame [[buffer(0)]],
     
     // High-pass / low-pass filters
     if (freq <= params.hpCutoff) {
-        float gain = 2.0 / (1.0 + pow((params.hpCutoff - freq), params.hpOrder));
+        float gain = 2.0 / (1.0 + pow(max(0.0f, (params.hpCutoff - freq)), clamp(params.hpOrder, 1.0f, 24.0f)));
         sum *= float2(gain, 0.0);
     }
     if (freq >= params.lpCutoff) {
-        float gain = 2.0 / (1.0 + pow((freq - params.lpCutoff), params.lpOrder));
+        float gain = 2.0 / (1.0 + pow(max(0.0f, (freq - params.lpCutoff)), clamp(params.lpOrder, 1.0f, 24.0f)));
         sum *= float2(gain, 0.0);
     }
     
