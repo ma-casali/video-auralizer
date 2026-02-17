@@ -184,3 +184,48 @@ func iFFT(_ spectrum: [DSPComplex]) -> [Float] {
     return output
 }
 
+func iFFT_Optimized(halfSpectrum: [DSPComplex]) -> [Float] {
+    // If halfSpectrum has 2048 elements, N = 4096 output samples
+    let n = halfSpectrum.count * 2
+    let log2N = vDSP_Length(log2(Double(n)))
+    let nOver2 = n / 2
+    
+    // 1. Prepare Split Complex
+    let realp = UnsafeMutablePointer<Float>.allocate(capacity: nOver2)
+    let imagp = UnsafeMutablePointer<Float>.allocate(capacity: nOver2)
+    
+    for i in 0..<nOver2 {
+        realp[i] = halfSpectrum[i].real
+        imagp[i] = halfSpectrum[i].imag
+    }
+    
+    var split = DSPSplitComplex(realp: realp, imagp: imagp)
+    
+    // 2. Setup (Ideally reuse this setup object in your class)
+    let fftSetup = vDSP_create_fftsetup(log2N, FFTRadix(kFFTRadix2))!
+    
+    // 3. Inverse Real FFT (zrip)
+    // Note: This expects the spectrum to be in "packed" format
+    vDSP_fft_zrip(fftSetup, &split, 1, log2N, FFTDirection(FFT_INVERSE))
+    
+    // 4. Conversion & Scaling
+    var output = [Float](repeating: 0, count: n)
+    
+    output.withUnsafeMutableBufferPointer { buffer in
+        // Rebind the Float pointer to a DSPComplex pointer for the interleaved conversion
+        let outputAsComplex = buffer.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: nOver2) { $0 }
+        
+        // Convert split complex (real/imag separate) to interleaved (real/imag/real/imag)
+        vDSP_ztoc(&split, 1, outputAsComplex, 1, vDSP_Length(nOver2))
+        
+        // Now that they are interleaved in the output array, scale them
+        var scale = 0.5 / Float(n)
+        vDSP_vsmul(buffer.baseAddress!, 1, &scale, buffer.baseAddress!, 1, vDSP_Length(n))
+    }
+    
+    vDSP_destroy_fftsetup(fftSetup)
+    realp.deallocate()
+    imagp.deallocate()
+    
+    return output
+}

@@ -20,17 +20,17 @@ struct SpectrumParams {
     let T: Float
     let Q_scaling: Float
     let spectrumMixing: Float
-    let padding0: Float = 0         // pad to align next UInt32
+    let frameSeed: Float
     
     let P: UInt32
     let F: UInt32
-    let padding1: UInt32 = 0        // pad to 16 bytes
+    let binWidth: Float
+    let padding0: UInt32 = 0
     
     let hpCutoff: Float
     let lpCutoff: Float
     let hpOrder: Float
     let lpOrder: Float
-    let padding2: UInt32 = 0        // pad to 16 bytes
 }
 
 struct ModeMultipliers {
@@ -60,6 +60,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private var textureCache: CVMetalTextureCache!
     private var computePipeline: MTLComputePipelineState!
     private var fusedPipeline: MTLComputePipelineState?
+    private var histogramPipeline: MTLComputePipelineState!
     private var modesBuffer: MTLBuffer?
     private var mipTexture: MTLTexture?
     
@@ -67,15 +68,18 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private let sampleRate: Float32 = 44100.0
     private let videoFs: Float32 = 30.0
     private var NFFT: Int = 4096
+    private var T: Float = 0.0
     private var N: Int
     private var F: Int
     @Published public var original_f: [Float] = []
     private var f: [Float] = []
+    private var binWidth: Float = 0.0
+    private var phaseOffset: Float = 0.0
     private var currentAudioParams = AudioParams(
-        hpCutoff: 400.0, // color spectrum frequency
+        hpCutoff: 4000.0, // color spectrum frequency
         lpCutoff: 790.0, // color spectrum frequency
-        hpOrder: 1.0,
-        lpOrder: 1.0,
+        hpOrder: 0.0,
+        lpOrder: 0.0,
         Q_scaling: 1.0,
         spectrumMixing: 0.85,
         Hanning_Window_Multiplier: 1.0
@@ -89,8 +93,8 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     @Published public var Hanning_Window_Multiplier: Float32 = 1.0
     @Published public var hpCutoff: Float32 = 200.0
     @Published public var lpCutoff: Float32 = 18_000.0
-    @Published public var hpOrder: Float32 = 1.0
-    @Published public var lpOrder: Float32 = 1.0
+    @Published public var hpOrder: Float32 = 0.0
+    @Published public var lpOrder: Float32 = 0.0
     @Published public var currentMipLevel: Int = 3
     
     // mode emphasis control
@@ -103,7 +107,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private var previousSpectrumDSP: [Complex]
     @Published private(set) var previousSpectrum: [Complex]
     @Published private(set) var previousSignal: [Float]
-    private var runningMax: Float = 0.0
+    private var runningMax: Float = 1.0
     private var lastRGBFrame: [(r: UInt8, g: UInt8, b: UInt8)]?
     
     // buffer parameters
@@ -114,6 +118,16 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private var readIndex = 0
     private var availableFrames = 0
     private let audioBufferLock = NSLock()
+    private var currentFrameSeed: Float = 0.0
+    
+    @Published public var debugHue: [SIMD4<Float>]
+    @Published public var debugSaturation: [SIMD4<Float>]
+    @Published public var debugIntensity: [SIMD4<Float>]
+    @Published public var cellAvgGrads: [SIMD4<Float>]
+    @Published public var debugHSI: [Float]
+    @Published public var debugSize: CGSize
+    
+    @Published public var cellMaxHues: [Int] = Array(repeating: 0, count: 16)
     
     // MARK: - Initialization
     override init() {
@@ -126,11 +140,19 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         self.previousSpectrumDSP = [Complex](repeating: Complex(0,0), count: self.F)
         self.previousSignal = [Float](repeating: 0, count: Int(self.N))
         self.audioFrames = Array(repeating: [Float](repeating: 0, count: NFFT), count: audioBufferSize)
+        
+        self.debugHue = []
+        self.debugSaturation = []
+        self.debugIntensity = []
+        self.cellAvgGrads = []
+        self.debugHSI = []
+        self.debugSize = .zero
 
         super.init()
         
-        self.original_f = linspace(start: Float(self.F) / sampleRate, end: sampleRate / 2 + Float(self.F) / sampleRate, num: self.F)
+        self.original_f = linspace(start: sampleRate / Float(self.F), end: sampleRate / 2 + sampleRate / Float(self.F), num: self.F)
         self.f = linearToLog2(self.original_f)
+        self.binWidth = (self.sampleRate / Float(self.N) )
         
         loadFrequencyLUT()
         setupMetal()
@@ -166,9 +188,13 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private func setupMetalCompute() {
         guard let library = device.makeDefaultLibrary() else {return}
         
-        // rgb to hsi values computation
-        guard let fusedKernel = library.makeFunction(name: "computeOrthogonalModesFromTexture") else {return}
+        // graident calculation
+        guard let fusedKernel = library.makeFunction(name: "convolveFeatures") else {return}
         fusedPipeline = try? device.makeComputePipelineState(function: fusedKernel)
+        
+        // hue histogram calculation
+        guard let histogramKernel = library.makeFunction(name: "calculateHueHistogram") else {return}
+        histogramPipeline = try? device.makeComputePipelineState(function: histogramKernel)
         
         // spectrum computation
         guard let kernel = library.makeFunction(name: "computeSpectrum") else { return }
@@ -342,11 +368,96 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             self.currentAudioParams = newParams
         }
     }
+    
+    // MARK: - Public processing of frame
+    func processManualBuffer(_ pixelBuffer: CVPixelBuffer) {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        
+        var cvTextureOut: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            textureCache,
+            pixelBuffer,
+            nil,
+            .bgra8Unorm,
+            width,
+            height,
+            0,
+            &cvTextureOut
+        )
+        
+        guard status == kCVReturnSuccess,
+              let cvTexture = cvTextureOut,
+              let sourceTexture = CVMetalTextureGetTexture(cvTexture) else { return }
+        
+        // allow support for mipmaps
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: width,
+            height: height,
+            mipmapped: true
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        
+        guard let mipmappedTexture = device.makeTexture(descriptor: desc),
+              let commandBuffer = commandQueue.makeCommandBuffer(),
+              let blitEncoder = commandBuffer.makeBlitCommandEncoder() else { return }
+
+        // 2. Copy the manual buffer into the mipmapped texture
+        blitEncoder.copy(from: sourceTexture, to: mipmappedTexture)
+        
+        // 3. Generate the mipmaps so that mipLevel 3 actually exists
+        blitEncoder.generateMipmaps(for: mipmappedTexture)
+        blitEncoder.endEncoding()
+
+        commandBuffer.addCompletedHandler { [weak self] _ in
+            self?.processFrame(texture: mipmappedTexture)
+        }
+        
+        commandBuffer.commit()
+}
+    
+    // MARK: - Find top n peaks in histogram
+    private func findTopNPeaks(histogram: [UInt32], n: Int, minDistance: Int) -> [Int] {
+        let numBins = histogram.count
+        var selectedPeaks: [Int] = []
+        
+        // 1. Create a list of all indices sorted by their histogram value (descending)
+        let sortedIndices = histogram.indices.sorted { histogram[$0] > histogram[$1] }
+        
+        for index in sortedIndices {
+            // Stop if we've found enough peaks
+            if selectedPeaks.count >= n { break }
+            
+            // Ignore noise (optional threshold)
+            if histogram[index] < 10 { break }
+            
+            // 2. Check if this index is far enough from already selected peaks
+            let isFarEnough = selectedPeaks.allSatisfy { existingPeak in
+                let diff = abs(index - existingPeak)
+                let circularDist = min(diff, numBins - diff)
+                return circularDist >= minDistance
+            }
+            
+            if isFarEnough {
+                selectedPeaks.append(index)
+            }
+        }
+        
+        return selectedPeaks
+    }
+    
+    
 
     // MARK: - Process a frame of audio
     private func processFrame(texture: MTLTexture) {
         audioQueue.async { [weak self] in
             guard let self = self else { return }
+            
+            // increment frame seed
+            self.currentFrameSeed += 1.0
+            if self.currentFrameSeed > 10_000.0 { self.currentFrameSeed = 0.0 }
             
             // Grab audio parameters
             let audioParams: AudioParams = self.paramsQueue.sync { self.currentAudioParams }
@@ -357,57 +468,159 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             let mipWidth = width >> self.currentMipLevel
             let mipHeight = height >> self.currentMipLevel
             let mipPixelCount = mipWidth * mipHeight
-            let requiredLength = mipPixelCount * MemoryLayout<Float>.stride
-
-            // set up output buffer for GPU compute
-            let ampBuf = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
-            let qBuf = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
-            let f0Buf = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
+            let requiredLength = mipPixelCount * MemoryLayout<Float>.stride * 4
+            var mipLevel = UInt32(self.currentMipLevel)
             
-            guard let ampBuf = ampBuf, let qBuf = qBuf, let f0Buf = f0Buf,
+            // MARK: - Metal Computation of Spectrogram
+            let numBins = 360
+            let numCells = 16
+            let bufferSize = numCells * numBins * MemoryLayout<UInt32>.stride
+            let outputBuffer = self.device.makeBuffer(length: bufferSize, options: .storageModeShared)
+            
+            if let buffer = outputBuffer {
+                memset(buffer.contents(), 0, buffer.length)
+            }
+            
+            guard let outputBuffer = outputBuffer,
                   let commandBuffer = self.commandQueue.makeCommandBuffer(),
-                  let computeEncoder = commandBuffer.makeComputeCommandEncoder(),
+                  let histEncoder = commandBuffer.makeComputeCommandEncoder(),
+                  let histogramPipeline = self.histogramPipeline else {
+                print("Failed to create histogram buffer, encoder, or pipeline")
+                return
+            }
+            
+            var w = UInt32(mipWidth)
+            var h = UInt32(mipHeight)
+            histEncoder.setComputePipelineState(histogramPipeline)
+            histEncoder.setTexture(texture, index: 0)
+            histEncoder.setBuffer(outputBuffer, offset: 0, index: 0)
+            histEncoder.setBytes(&w, length: 4, index: 1)
+            histEncoder.setBytes(&h, length: 4, index: 2)
+            histEncoder.setBytes(&mipLevel, length: 4, index: 3)
+            
+            let wtg = min(device.maxThreadsPerThreadgroup.width, 16)
+            let htg = min(device.maxThreadsPerThreadgroup.height, 16)
+            let threadsPerGrid = MTLSize(width: mipWidth, height: mipHeight, depth: 1)
+            let threadsPerThreadGroup = MTLSize(width: wtg, height: htg, depth: 1)
+            histEncoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadGroup)
+            
+            histEncoder.endEncoding()
+            commandBuffer.addCompletedHandler { _ in
+                let rawPointer = outputBuffer.contents().assumingMemoryBound(to: UInt32.self)
+                let allData = Array(UnsafeBufferPointer(start: rawPointer, count: numBins * numCells))
+                
+                var updatedHues = self.cellMaxHues
+                let mixing = self.spectrumMixing
+
+                for cellIdx in 0..<16 {
+                    let start = cellIdx * 360
+                    let end = start + 360
+                    let cellHist = allData[start..<end]
+                    
+                    if let maxVal = cellHist.max(), maxVal > 20 {
+                        if let maxIndex = cellHist.indices.max(by: { cellHist[$0] < cellHist[$1] }) {
+                            let hueBin = Float(maxIndex - 360 * cellIdx)
+                            let currentStoredHue = Float(updatedHues[cellIdx])
+                            let originalMix = currentStoredHue * mixing
+                            let newMix = hueBin * (1.0 - mixing)
+                            updatedHues[cellIdx] = Int(originalMix + newMix)
+                        }
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    self.cellMaxHues = updatedHues
+                }
+                
+            }
+            
+            commandBuffer.commit()
+            
+            // MARK: - Metal Computation of Gradients
+            // set up output buffer for GPU compute
+            let hueBuffer = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
+            let saturationBuffer = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
+            let intensityBuffer = self.device.makeBuffer(length: requiredLength, options: .storageModeShared)
+            let hsiBuffer = self.device.makeBuffer(length: mipPixelCount * MemoryLayout<SIMD3<Int>>.stride, options: .storageModeShared)
+            
+            guard let hueBuffer = hueBuffer, let saturationBuffer = saturationBuffer, let intensityBuffer = intensityBuffer, let hsiBuffer = hsiBuffer,
+                  let commandBuffer = self.commandQueue.makeCommandBuffer(),
+                  let featureEncoder = commandBuffer.makeComputeCommandEncoder(),
                   let fusedPipeline = self.fusedPipeline else {
                 print("Failed to create command buffer, encoder, or pipeline")
                 return
             }
           
             // encode bytes for GPU compute
-            computeEncoder.setComputePipelineState(fusedPipeline)
-            computeEncoder.setTexture(texture, index: 0)
-            computeEncoder.setBuffer(ampBuf, offset: 0, index: 0)
-            computeEncoder.setBuffer(qBuf, offset: 0, index: 1)
-            computeEncoder.setBuffer(f0Buf, offset: 0, index: 2)
+            featureEncoder.setComputePipelineState(fusedPipeline)
+            featureEncoder.setTexture(texture, index: 0)
+            featureEncoder.setBuffer(hueBuffer, offset: 0, index: 0)
+            featureEncoder.setBuffer(saturationBuffer, offset: 0, index: 1)
+            featureEncoder.setBuffer(intensityBuffer, offset: 0, index: 2)
             
-            var w = UInt32(mipWidth)
-            var h = UInt32(mipHeight)
             assert(self.currentMipLevel < texture.mipmapLevelCount)
-            var mipLevel = UInt32(self.currentMipLevel)
-            computeEncoder.setBytes(&w, length: 4, index: 3)
-            computeEncoder.setBytes(&h, length: 4, index: 4)
-            computeEncoder.setBytes(&mipLevel, length: 4, index: 5)
+            featureEncoder.setBytes(&w, length: 4, index: 3)
+            featureEncoder.setBytes(&h, length: 4, index: 4)
+            featureEncoder.setBytes(&mipLevel, length: 4, index: 5)
             
-            var multipliers = ModeMultipliers(
-                breathing: self.breathingMode,
-                verticalTilt: self.verticalTiltMode,
-                horizontalTilt: self.horizontalTiltMode,
-                shear: self.shearMode
-            )
-            computeEncoder.setBytes(&multipliers, length: MemoryLayout<ModeMultipliers>.size, index: 6)
+            featureEncoder.setBuffer(hsiBuffer, offset: 0, index: 6)
+
+            featureEncoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadGroup)
             
-            let wtg = min(device.maxThreadsPerThreadgroup.width, 16)
-            let htg = min(device.maxThreadsPerThreadgroup.height, 16)
-            let threadsPerThreadGroup = MTLSize(width: wtg, height: htg, depth: 1)
-            let threadsPerGrid = MTLSize(width: mipWidth, height: mipHeight, depth: 1)
-            computeEncoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadGroup)
-            
-            computeEncoder.endEncoding()
+            featureEncoder.endEncoding()
             
             commandBuffer.addCompletedHandler { _ in
+                
+                let hueData = Array(UnsafeBufferPointer(start: hueBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount))
+                let saturationData = Array(UnsafeBufferPointer(start: saturationBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount))
+                let intensityData = Array(UnsafeBufferPointer(start: intensityBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount))
+                let hsiData = Array(UnsafeBufferPointer(start: hsiBuffer.contents().assumingMemoryBound(to: SIMD3<Float>.self), count: mipPixelCount))
+                
+                // Calculate cell averages for each type of intensity gradient
+                
+                var cellAvgGrads: [SIMD4<Float>] = Array(repeating: .zero, count: 16)
 
-                let amplitudeFrame = Array(UnsafeBufferPointer(start: ampBuf.contents().assumingMemoryBound(to: Float.self), count: mipPixelCount))
-                let QFrame = Array(UnsafeBufferPointer(start: qBuf.contents().assumingMemoryBound(to: Float.self), count: mipPixelCount))
-                let f0Frame = Array(UnsafeBufferPointer(start: f0Buf.contents().assumingMemoryBound(to: Float.self), count: mipPixelCount))
+                for cellIdx in 0..<16 {
+                    let pixelsPerCell = intensityData.count / 16
+                    let start = cellIdx * pixelsPerCell
+                    let end = (cellIdx == 15) ? intensityData.count : (start + pixelsPerCell)
+                    let cellGrads = intensityData[start..<end]
+                    
+                    var sumSquaredX: Float = 0
+                    var sumAbsY: Float = 0
+                    var sumAbsZ: Float = 0
+                    var maxW: Float = 0
+                    
+                    for grad in cellGrads {
+                        // RMS for Breathing (Power)
+                        sumSquaredX += grad.x * grad.x
+                        
+                        // Absolute for Tilts (Dominance)
+                        sumAbsY += abs(grad.y)
+                        sumAbsZ += abs(grad.z)
+                        
+                        // Peak for Saddle (Detection of sharp features)
+                        maxW = max(maxW, abs(grad.w))
+                    }
+                    
+                    let countF = Float(cellGrads.count)
+                    
+                    // Combine them back into a SIMD4 for the Debugger and Synth
+                    cellAvgGrads[cellIdx] = SIMD4<Float>(
+                        sqrt(sumSquaredX / countF), // RMS
+                        sumAbsY / countF,           // Mean Absolute
+                        sumAbsZ / countF,           // Mean Absolute
+                        maxW                        // Peak
+                    )
+                }
+                
+                DispatchQueue.main.async {
+                    self.debugHue = hueData
+                    self.debugSaturation = saturationData
+                    self.debugIntensity = intensityData
+                    self.debugSize = CGSize(width: mipWidth, height: mipHeight)
+                    self.cellAvgGrads = cellAvgGrads
+                }
                 
                 self.paramsQueue.async(flags: .barrier) {
                     self.currentAudioParams = AudioParams(
@@ -420,13 +633,17 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                         Hanning_Window_Multiplier: self.Hanning_Window_Multiplier
                     )
                 }
-                 
+                
+                self.T += Float(self.NFFT) / 44100.0
+                
                 let spectrumParams = SpectrumParams(
-                     T: Float(self.N) / audioParams.Hanning_Window_Multiplier,
+                     T: self.T,
                      Q_scaling: audioParams.Q_scaling,
                      spectrumMixing: audioParams.spectrumMixing,
+                     frameSeed: self.currentFrameSeed,
                      P: UInt32(mipPixelCount),
                      F: UInt32(self.F),
+                     binWidth: self.binWidth,
                      hpCutoff: audioParams.hpCutoff,
                      lpCutoff: audioParams.lpCutoff,
                      hpOrder: audioParams.hpOrder,
@@ -435,15 +652,16 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
 
                  // Compute Spectrum on GPU
                  self.computeTotalSpectrumGPU(
-                     amplitudeFrame: amplitudeFrame,
-                     QFrame: QFrame,
-                     f0Frame: f0Frame,
-                     frequencies: self.f,
+                     fundamentals: self.cellMaxHues,
+                     grads: self.cellAvgGrads,
+                     frequencies: self.original_f,
+                     P: Int(mipPixelCount),
                      spectrumParams: spectrumParams
                  ) { totalSpectrum in
+                     
                      // Mirror and conjugate
                      let fullSpectrum = mirrorAndConjugate(totalSpectrum)
-                     
+
                      // Take the IFFT
                      let signal = iFFT(fullSpectrum)
                      
@@ -481,31 +699,29 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
             }
             
             commandBuffer.commit()
+            
         }
     }
             
     // MARK: - Prepare for GPU processing
     func computeTotalSpectrumGPU(
-        amplitudeFrame: [Float],
-        QFrame: [Float],
-        f0Frame: [Float],
+        fundamentals: [Int?],
+        grads: [SIMD4<Float>],
         frequencies: [Float],
+        P: Int,
         spectrumParams: SpectrumParams,
         completion: @escaping ([Complex]) -> Void
     ){
         let F = frequencies.count
-        let P = amplitudeFrame.count
         
         // GPU buffers
-        let amplitudeBuffer = device.makeBuffer(bytes: amplitudeFrame,
-                                                length: P * MemoryLayout<Float>.stride,
-                                                options: [])
-        let QBuffer = device.makeBuffer(bytes: QFrame,
-                                        length: P * MemoryLayout<Float>.stride,
-                                        options: [])
-        let f0Buffer = device.makeBuffer(bytes: f0Frame,
-                                         length: P * MemoryLayout<Float>.stride,
-                                         options: [])
+        let fundamentalsBuffer = device.makeBuffer(bytes: fundamentals,
+                                                   length: 16 * MemoryLayout<SIMD4<Float>>.stride,
+                                                   options: [])
+        let gradsBuffer = device.makeBuffer(bytes: grads,
+                                            length: 16 * MemoryLayout<SIMD4<Float>>.stride,
+                                            options: [])
+
         let freqBuffer = device.makeBuffer(bytes: frequencies,
                                            length: F * MemoryLayout<Float>.stride,
                                            options: [])
@@ -530,13 +746,12 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
               }
         
         encoder.setComputePipelineState(computePipeline)
-        encoder.setBuffer(amplitudeBuffer, offset: 0, index: 0)
-        encoder.setBuffer(QBuffer, offset: 0, index: 1)
-        encoder.setBuffer(f0Buffer, offset: 0, index: 2)
-        encoder.setBuffer(freqBuffer, offset: 0, index: 3)
-        encoder.setBuffer(previousBuffer, offset: 0, index: 4)
-        encoder.setBuffer(totalSumBuffer, offset: 0, index: 5)
-        encoder.setBuffer(paramBuffer, offset: 0, index: 6)
+        encoder.setBuffer(fundamentalsBuffer, offset: 0, index: 0)
+        encoder.setBuffer(gradsBuffer, offset: 0, index: 1)
+        encoder.setBuffer(freqBuffer, offset: 0, index: 2)
+        encoder.setBuffer(previousBuffer, offset: 0, index: 3)
+        encoder.setBuffer(totalSumBuffer, offset: 0, index: 4)
+        encoder.setBuffer(paramBuffer, offset: 0, index: 5)
         
         // Launch threads
         let threadsPerThreadgroup = MTLSize(width: 16, height: 1, depth: 1)

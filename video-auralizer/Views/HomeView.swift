@@ -26,13 +26,23 @@ struct HomeView: View {
                     .background(Color.blue)
                     .cornerRadius(8)
                 }
+                
+                .padding(10)
+                
+                NavigationLink(destination: ConvolutionDebugView(converter: converter) ){
+                    Text("See Tutorial")
+                    .foregroundColor(.white)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(8)
+                }
             }
         }
     }
 }
-
-#Preview {
-    HomeView()
-}
+//
+//#Preview {
+//    HomeView(converter: VideoConverter())
+//}
 
 

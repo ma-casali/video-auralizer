@@ -56,11 +56,11 @@ struct SpectrumView: View {
                         
                         let maxMagnitude: Float = magnitudes.max()!
                         let magnitudeDB = magnitudes.map { c in
-                            return 20 * log10( c / maxMagnitude )
+                            return 20 * log10( c / maxMagnitude)
                         }
                         
                         let maxDB: Float = 0
-                        let minDB: Float = -120
+                        let minDB: Float = -180
                         
                         // --- Draw spectrum line ---
                         var path = Path()

@@ -33,6 +33,7 @@ struct AuralizerView: View {
             ZStack {
                 SpectrumView(converter: converter)
                     .frame(height: 150)
+                    .frame(width: 320)
                     .clipped()
                     .padding(.horizontal, 10)
                 

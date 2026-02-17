@@ -70,7 +70,9 @@ kernel void computeOrthogonalModesFromTexture(
         I = sum / 3.0;
 
         float mn = min(r, min(g, b));
-        S = (sum > 1e-6f) ? 1.0f - (3.0f * mn / sum) : 0.0f;
+        float mx = max(r, max(g, b));
+//        S = (sum > 1e-6f) ? 1.0f - (3.0f * mn / sum) : 0.0f;
+        S = (I > 1e-6f) ? ((mx - mn)/mx) : 0.0f;
 
         float num = 0.5f * ((r - g) + (r - b));
         float den = sqrt((r - g)*(r - g) + (r - b)*(g - b));
@@ -133,7 +135,7 @@ kernel void computeOrthogonalModesFromTexture(
                                I_M3 * modes.horizontalTilt +
                                I_M4 * modes.shear);
     
-    float qExp = (S_c +
+    float finalQ = (S_c +
                   S_M1 * modes.breathing +
                   S_M2 * modes.verticalTilt +
                   S_M3 * modes.horizontalTilt +
@@ -143,7 +145,7 @@ kernel void computeOrthogonalModesFromTexture(
     // Write output
     // ----------------------------------------
     amplitudeOut[idx] = max(0.0f, finalAmp);
-    qFrameOut[idx] = pow(10.0f, clamp(qExp, -2.0f, 2.0f));
+    qFrameOut[idx] = clamp(finalQ, 0.0f, 1.0f);
     f0Out[idx] = f0_c;
 }
 
