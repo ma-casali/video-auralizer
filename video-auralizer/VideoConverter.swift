@@ -85,6 +85,20 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         Hanning_Window_Multiplier: 1.0
     )
     
+    private let besselRatios: [Float] = [
+        // j11 = 3.8317
+        4.2012 / 3.8317, // j31
+        5.3314 / 3.8317, // j12
+        6.7061 / 3.8317, // j22
+        7.0156 / 3.8317, // j02
+        8.0152 / 3.8317, // j32
+        8.5363 / 3.8317, // j13
+        9.9695 / 3.8317, // j23
+        10.1735 / 3.8317, // j03
+        11.3459 / 3.8317, // j33
+    ]
+
+    
     // controllable parameters
     @Published public var attack: Float32 = 0.25
     @Published public var release: Float32 = 0.25
@@ -106,6 +120,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     // history parameters
     private var previousSpectrumDSP: [Complex]
     @Published private(set) var previousSpectrum: [Complex]
+    private var phaseAccumulation = [Float](repeating: 0.0, count: 16 * (13 + 9))
     @Published private(set) var previousSignal: [Float]
     private var runningMax: Float = 1.0
     private var lastRGBFrame: [(r: UInt8, g: UInt8, b: UInt8)]?
@@ -119,6 +134,14 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
     private var availableFrames = 0
     private let audioBufferLock = NSLock()
     private var currentFrameSeed: Float = 0.0
+    private var olaBuffer = [Float](repeating: 0, count: 4096) // tail of the previous frame
+    private let hopSize: Int = 2048
+    private let window: [Float] = {
+        var w = [Float](repeating: 0, count: 4096)
+        vDSP_hann_window(&w, 4096, Int32(vDSP_HANN_NORM))
+        return w
+    }()
+    private var persistentPhases = [Float](repeating: 0.0, count: 4096)
     
     @Published public var debugHue: [SIMD4<Float>]
     @Published public var debugSaturation: [SIMD4<Float>]
@@ -139,7 +162,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         self.previousSpectrum = [Complex](repeating: Complex(0,0), count: self.F)
         self.previousSpectrumDSP = [Complex](repeating: Complex(0,0), count: self.F)
         self.previousSignal = [Float](repeating: 0, count: Int(self.N))
-        self.audioFrames = Array(repeating: [Float](repeating: 0, count: NFFT), count: audioBufferSize)
+        self.audioFrames = Array(repeating: [Float](repeating: 0, count: self.hopSize), count: audioBufferSize)
         
         self.debugHue = []
         self.debugSaturation = []
@@ -448,6 +471,66 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         return selectedPeaks
     }
     
+    private func applyOverlapAdd(signal: [Float]) -> [Float] {
+        // 1. Normalize current block
+        let framePeak = signal.map { abs($0) }.max() ?? 1.0
+        let gain = 1.0 / (framePeak + 1e-6)
+        var normalized = [Float](repeating: 0, count: 4096)
+        vDSP_vsmul(signal, 1, [gain], &normalized, 1, 4096)
+
+        // 2. Apply Hann Window to the time-domain signal
+        var windowed = [Float](repeating: 0, count: 4096)
+        vDSP_vmul(normalized, 1, self.window, 1, &windowed, 1, 4096)
+
+        // 3. Sum the FIRST half of current with the SECOND half of previous
+        var output = [Float](repeating: 0, count: 2048)
+        
+        // Previous Tail (stored in olaBuffer)
+        self.olaBuffer.withUnsafeBufferPointer { prevPtr in
+            windowed.withUnsafeBufferPointer { currPtr in
+                // Add second half of old buffer to first half of new buffer
+                vDSP_vadd(prevPtr.baseAddress! + 2048, 1,
+                          currPtr.baseAddress!, 1,
+                          &output, 1, 2048)
+            }
+        }
+
+        // 4. Update the Tail for the next frame
+        self.olaBuffer = windowed
+        
+        return output
+    }
+    
+    /// Finds the index of the value in 'freqs' closest to 'target'
+    private func findClosestIndex(freqs: [Float], target: Float) -> Int {
+        let count = freqs.count
+        if count == 0 { return 0 }
+        
+        var low = 0
+        var high = count - 1
+        
+        // Binary search
+        while low <= high {
+            let mid = low + (high - low) / 2
+            if freqs[mid] < target {
+                low = mid + 1
+            } else if freqs[mid] > target {
+                high = mid - 1
+            } else {
+                return mid // Exact match found
+            }
+        }
+        
+        // Boundary checks
+        if low >= count { return count - 1 }
+        if low <= 0 { return 0 }
+        
+        // Determine which of the two remaining neighbors is actually closer
+        let diffCurrent = abs(freqs[low] - target)
+        let diffPrevious = abs(freqs[low - 1] - target)
+        
+        return diffCurrent < diffPrevious ? low : low - 1
+    }
     
 
     // MARK: - Process a frame of audio
@@ -574,7 +657,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                 let hueData = Array(UnsafeBufferPointer(start: hueBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount))
                 let saturationData = Array(UnsafeBufferPointer(start: saturationBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount))
                 let intensityData = Array(UnsafeBufferPointer(start: intensityBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount))
-                let hsiData = Array(UnsafeBufferPointer(start: hsiBuffer.contents().assumingMemoryBound(to: SIMD3<Float>.self), count: mipPixelCount))
+//                let hsiData = Array(UnsafeBufferPointer(start: hsiBuffer.contents().assumingMemoryBound(to: SIMD3<Float>.self), count: mipPixelCount))
                 
                 // Calculate cell averages for each type of intensity gradient
                 
@@ -634,7 +717,7 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                     )
                 }
                 
-                self.T += Float(self.NFFT) / 44100.0
+                self.T += Float(self.hopSize) / 44100.0
                 
                 let spectrumParams = SpectrumParams(
                      T: self.T,
@@ -649,8 +732,8 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                      hpOrder: audioParams.hpOrder,
                      lpOrder: audioParams.lpOrder
                  )
-
-                 // Compute Spectrum on GPU
+                
+                 // MARK: - Spectrum Computation
                  self.computeTotalSpectrumGPU(
                      fundamentals: self.cellMaxHues,
                      grads: self.cellAvgGrads,
@@ -658,6 +741,37 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                      P: Int(mipPixelCount),
                      spectrumParams: spectrumParams
                  ) { totalSpectrum in
+                     
+                     // take care of phase accumulation first
+                     for cell in 0..<16 {
+                         // 1. Ensure the power math is done in Double, then cast to Float
+                         let hueValue = Double(self.cellMaxHues[cell])
+                         let f0_raw = Float(220.0 * pow(2.0, (hueValue / 360.0) * 3.0))
+                         
+                         // 2. findClosestIndex returns an Int (index).
+                         // We need to look up the actual frequency value at that index.
+                         let f0Index = self.findClosestIndex(freqs: self.original_f, target: f0_raw)
+                         let f0 = self.original_f[f0Index] // This is the Float frequency
+                         
+                         // Harmonics loop
+                         for h in 1...13 { // Using 1...13 to include the 13th harmonic
+                             let hFreq = f0 * Float(h)
+                             let idx = (cell * (13 + 9)) + (h - 1)
+                             
+                             // Explicitly cast all components to Float
+                             let phaseAdvance = (Float.pi * 2.0 * hFreq * Float(self.hopSize)) / Float(self.sampleRate)
+                             self.phaseAccumulation[idx] = (self.phaseAccumulation[idx] + phaseAdvance).truncatingRemainder(dividingBy: Float.pi * 2.0)
+                         }
+                         
+                         // Bessel loop
+                         for b in 0..<9 {
+                             let bFreq = f0 * Float(self.besselRatios[b])
+                             let idx = (cell * (13 + 9)) + 13 + b // Offset by 13 to not overwrite harmonics
+                             
+                             let phaseAdvance = (Float.pi * 2.0 * bFreq * Float(self.hopSize)) / Float(self.sampleRate)
+                             self.phaseAccumulation[idx] = (self.phaseAccumulation[idx] + phaseAdvance).truncatingRemainder(dividingBy: Float.pi * 2.0)
+                         }
+                     }
                      
                      // Mirror and conjugate
                      let fullSpectrum = mirrorAndConjugate(totalSpectrum)
@@ -676,10 +790,13 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
                      var normFactor = sigmoidNormalize(x: framePeak, M: self.runningMax)
                      normFactor = max(min(normFactor, 1.0), 0.0)
                      let normValue = framePeak / normFactor
-                     var outputSignalFrame = [Float](repeating: 0, count: signal.count)
+                     
+                     var normalizedSignal = [Float](repeating: 0, count: signal.count)
                      if normValue != 0 {
-                         vDSP.divide(signal, normValue, result: &outputSignalFrame)
+                         vDSP.divide(signal, normValue, result: &normalizedSignal)
                      }
+                     
+                     let outputSignalFrame = self.applyOverlapAdd(signal: normalizedSignal)
                      
                      DispatchQueue.main.async {
                          self.previousSignal = outputSignalFrame
@@ -730,6 +847,8 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         
         let previousBuffer = device.makeBuffer(bytes: &previous, length: F * MemoryLayout<simd_float2>.size, options: [])
         
+        let phaseAccumulationBuffer = device.makeBuffer(bytes: &self.phaseAccumulation, length: F * MemoryLayout<Float>.size, options: [])
+        
         var totalSumData = [simd_float2](repeating: simd_float2(0,0), count: F)
         let totalSumBuffer = device.makeBuffer(bytes: &totalSumData, length: F * MemoryLayout<simd_float2>.size, options: [])
 
@@ -750,8 +869,9 @@ final class VideoConverter: NSObject, ObservableObject, AVCaptureVideoDataOutput
         encoder.setBuffer(gradsBuffer, offset: 0, index: 1)
         encoder.setBuffer(freqBuffer, offset: 0, index: 2)
         encoder.setBuffer(previousBuffer, offset: 0, index: 3)
-        encoder.setBuffer(totalSumBuffer, offset: 0, index: 4)
-        encoder.setBuffer(paramBuffer, offset: 0, index: 5)
+        encoder.setBuffer(phaseAccumulationBuffer, offset: 0, index: 4)
+        encoder.setBuffer(totalSumBuffer, offset: 0, index: 5)
+        encoder.setBuffer(paramBuffer, offset: 0, index: 6)
         
         // Launch threads
         let threadsPerThreadgroup = MTLSize(width: 16, height: 1, depth: 1)

@@ -110,6 +110,7 @@ func lookupF0(r: Int, g: Int, b: Int) -> Float {
 func mirrorAndConjugate(_ half: [Complex]) -> [DSPComplex] {
     let F = half.count // number of bins from frequency sampling
     let NFFT = 2 * (F + 1)
+    print(NFFT)
     
     var full = [DSPComplex](repeating: DSPComplex(real: 0, imag: 0), count: NFFT)
     

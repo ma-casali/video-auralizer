@@ -79,8 +79,9 @@ kernel void computeSpectrum(device const int* fundamentals [[buffer(0)]],
                             device const float4* grads [[buffer(1)]],
                             device const float* frequencies [[buffer(2)]],
                             device const float2* previousSpectrum [[buffer(3)]],
-                            device float2* totalSum [[buffer(4)]],
-                            constant SpectrumParams& params [[buffer(5)]],
+                            device const float* phaseAccum [[buffer(4)]],
+                            device float2* totalSum [[buffer(5)]],
+                            constant SpectrumParams& params [[buffer(6)]],
                             uint fIdx [[thread_position_in_grid]])
 {
     if (fIdx >= params.F) return;
@@ -125,12 +126,11 @@ kernel void computeSpectrum(device const int* fundamentals [[buffer(0)]],
             if (hFreq > 20000.0f) break;
             
             // --- NEW: Per-Harmonic Phase ---
-                // Use the cell index, frequency index, and harmonic number to create a unique seed
+            // Use the cell index, frequency index, and harmonic number to create a unique seed
             float hSeed = float(cell) * 1.618f + float(h) * 13.13f;
-            float phaseVelocity = 2.0f * M_PI * hFreq * params.T;
+            float phaseVelocity = phaseAccum[cell*(13 + 9) + (h-1)];
             float hPhase = fract(sin(hSeed) * 43758.5453f) * 2.0f * M_PI + phaseVelocity;
             float2 hPhaseVec = float2(cos(hPhase), sin(hPhase));
-            
 
             // Base gain with breathing-controlled roll-off
             float hGain = pow(float(h), -rollOffFactor);
@@ -165,14 +165,14 @@ kernel void computeSpectrum(device const int* fundamentals [[buffer(0)]],
 
         // 5. Inharmonic Bessel Modes (Saddle Mode)
         // This adds the "metallic" Neumann membrane character
-        for (int b = 0; b < 10; ++b) {
+        for (int b = 0; b < 8; ++b) {
             float bFreq = f0 * besselRatios[b];
             if (bFreq > 20000.0f) break;
             
             // --- NEW: Per-Harmonic Phase ---
             // Use the cell index, frequency index, and harmonic number to create a unique seed
             float bSeed = float(cell) * 1.618f + float(b) * 13.13f;
-            float phaseVelocity = 2.0f * M_PI * bFreq * params.T;
+            float phaseVelocity = phaseAccum[cell*(13+9) + b];
             float bPhase = fract(sin(bSeed) * 43758.5453f) * 2.0f * M_PI + phaseVelocity;
             float2 bPhaseVec = float2(cos(bPhase), sin(bPhase));
 
