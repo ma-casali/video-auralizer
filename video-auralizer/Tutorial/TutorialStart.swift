@@ -33,7 +33,7 @@ struct TutorialSlider: View {
 }
 
 struct TutorialView: View {
-    @ObservedObject var converter: VideoConverter
+    @ObservedObject var converter: VideoToAudio
     @State private var screenSize: CGSize = .zero
     @State private var isPlaying: Bool = false
     
@@ -115,20 +115,11 @@ struct TutorialView: View {
                 // 2. Generate the fake pixel buffer (using the helper we moved into the class)
                 if let buffer = createColorBuffer(color: color, width: 640, height: 480) {
                     // 3. Inject it into the pipeline
-                    converter.spectrumMixing = 0.90
-                    converter.hpCutoff = 0.0
-                    converter.lpCutoff = 20_000.0
-                    converter.Hanning_Window_Multiplier = 1.0
-                    converter.Q_scaling = 1.0
-                    converter.attack = 1.0
-                    converter.release = 1.0
-                    
-                    converter.breathingMode = 0.0
-                    converter.shearMode = 0.0
-                    converter.horizontalTiltMode = 0.0
-                    converter.verticalTiltMode = 0.0
-                    
-                    converter.processManualBuffer(buffer)
+                    converter.soundEngine.spectrumMixing = 0.90
+                    converter.soundEngine.hpCutoff = 0.0
+                    converter.soundEngine.lpCutoff = 20_000.0
+                    converter.soundEngine.attack = 1.0
+                    converter.soundEngine.release = 1.0
                 }
             }
             .background(
@@ -141,5 +132,5 @@ struct TutorialView: View {
 }
 
 #Preview{
-    TutorialView(converter: VideoConverter())
+    TutorialView(converter: VideoToAudio())
 }

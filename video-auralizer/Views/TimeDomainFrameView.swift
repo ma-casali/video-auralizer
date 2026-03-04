@@ -9,7 +9,7 @@
 import SwiftUI
 
 struct TimeDomainFrameView: View {
-    @ObservedObject var converter: VideoConverter
+    @ObservedObject var converter: VideoToAudio
     @Environment(\.colorScheme) var colorScheme
     
     var waveFormColor: Color {
@@ -18,7 +18,7 @@ struct TimeDomainFrameView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let N = converter.previousSignal.count
+            let N = converter.soundEngine.previousSignal.count
             
             Canvas { context, size in
                 guard N > 1 else { return }
@@ -31,12 +31,12 @@ struct TimeDomainFrameView: View {
 
                 path.move(to: CGPoint(
                     x: 0,
-                    y: midY - CGFloat(converter.previousSignal[0]) * scaleY
+                    y: midY - CGFloat(converter.soundEngine.previousSignal[0]) * scaleY
                 ))
 
                 for i in 1..<N {
                     let x = CGFloat(i) * scaleX
-                    let y = midY - CGFloat(converter.previousSignal[i]) * scaleY
+                    let y = midY - CGFloat(converter.soundEngine.previousSignal[i]) * scaleY
                     path.addLine(to: CGPoint(x: x, y: y))
                 }
 

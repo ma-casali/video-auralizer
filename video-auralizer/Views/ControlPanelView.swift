@@ -9,26 +9,26 @@ import SwiftUI
 
 
 struct ControlPanelView: View {
-    @ObservedObject var converter: VideoConverter
+    @ObservedObject var converter: VideoToAudio
     
     var body: some View {
         NavigationStack{
             VStack {
                 Slider(
-                    value: $converter.hpCutoff,
+                    value: $converter.soundEngine.hpCutoff,
                     in: 20...20000
                 )
-                Text("HP Cutoff: \(converter.hpCutoff, specifier: "%.0f") Hz")
+                Text("HP Cutoff: \(converter.soundEngine.hpCutoff, specifier: "%.0f") Hz")
                 
                 Slider(
                     value: Binding(
-                        get: { 20000 - converter.lpCutoff },
-                        set: { converter.lpCutoff = 20000 - $0 }
+                        get: { 20000 - converter.soundEngine.lpCutoff },
+                        set: { converter.soundEngine.lpCutoff = 20000 - $0 }
                     ),
                     in: 20...20000
                 )
                 .environment(\.layoutDirection, .rightToLeft)
-                Text("LP Cutoff: \(converter.lpCutoff, specifier: "%.0f") Hz")
+                Text("LP Cutoff: \(converter.soundEngine.lpCutoff, specifier: "%.0f") Hz")
                 
                 NavigationLink(destination: ExtraControlView(converter: converter)){
                     Text("More Controls")
@@ -43,5 +43,5 @@ struct ControlPanelView: View {
 }
 
 #Preview{
-    ControlPanelView(converter: VideoConverter())
+    ControlPanelView(converter: VideoToAudio())
 }

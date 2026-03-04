@@ -8,7 +8,8 @@
 import SwiftUI
 
 struct HomeView: View {
-    @EnvironmentObject var converter: VideoConverter
+//    @EnvironmentObject var converter: VideoConverter
+    @EnvironmentObject var converter: VideoToAudio
 
     var body: some View {
         NavigationStack{

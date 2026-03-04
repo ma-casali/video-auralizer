@@ -10,7 +10,8 @@ import SwiftUI
 @main
 struct MyApp: App {
     // Initialize VideoConverter for the entire app lifetime
-    @StateObject private var converter = VideoConverter()
+//    @StateObject private var converter = VideoConverter()
+    @StateObject private var converter = VideoToAudio()
 
     var body: some Scene {
         WindowGroup {

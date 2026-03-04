@@ -10,7 +10,7 @@ import UIKit
 import CoreGraphics
 
 struct AuralizerView: View {
-    @EnvironmentObject var converter: VideoConverter
+    @EnvironmentObject var converter: VideoToAudio
     @StateObject private var camera = CameraModel()
     
     @State private var screenSize: CGSize = .zero
@@ -38,20 +38,20 @@ struct AuralizerView: View {
                     .padding(.horizontal, 10)
                 
                 FilterTool(x1Value: Binding(
-                            get: {CGFloat(log2(converter.hpCutoff/20.0)/log2(20_000.0/20.0))},
-                            set: {converter.hpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
+                    get: {CGFloat(log2(converter.soundEngine.hpCutoff/20.0)/log2(20_000.0/20.0))},
+                    set: {converter.soundEngine.hpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
                             ),
                            y1Value: Binding(
-                            get: {CGFloat(converter.hpOrder/10.0)} ,
-                            set: {converter.hpOrder = Float($0)*10.0}
+                            get: {CGFloat(converter.soundEngine.hpOrder/10.0)} ,
+                            set: {converter.soundEngine.hpOrder = Float($0)*10.0}
                             ),
                            x2Value: Binding(
-                            get: {CGFloat(log2(converter.lpCutoff/20.0)/log2(20_000.0/20.0))},
-                            set: {converter.lpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
+                            get: {CGFloat(log2(converter.soundEngine.lpCutoff/20.0)/log2(20_000.0/20.0))},
+                            set: {converter.soundEngine.lpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
                             ),
                            y2Value: Binding(
-                            get: {CGFloat(converter.lpOrder/10.0)} ,
-                            set: {converter.lpOrder = Float($0)*10.0}
+                            get: {CGFloat(converter.soundEngine.lpOrder/10.0)} ,
+                            set: {converter.soundEngine.lpOrder = Float($0)*10.0}
                             )
                     )
                 .padding(.horizontal, 10)
@@ -70,11 +70,11 @@ struct AuralizerView: View {
                     )
             .onAppear {
                 camera.startSession()
-                converter.attachToSession(camera.session)
+                converter.visionEngine.attachToSession(camera.session)
             }
             VStack{
-                Text(String(format: "High-Pass Cutoff: %.2f with Order: %.2f", converter.hpCutoff, converter.hpOrder))
-                Text(String(format: "Low-Pass Cutoff: %.2f with Order: %.2f", converter.lpCutoff, converter.lpOrder))
+                Text(String(format: "High-Pass Cutoff: %.2f with Order: %.2f", converter.soundEngine.hpCutoff, converter.soundEngine.hpOrder))
+                Text(String(format: "Low-Pass Cutoff: %.2f with Order: %.2f", converter.soundEngine.lpCutoff, converter.soundEngine.lpOrder))
             }
             
             NavigationLink(destination: ExtraControlView(converter: converter)){

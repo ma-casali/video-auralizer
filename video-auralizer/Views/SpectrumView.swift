@@ -9,7 +9,7 @@ import SwiftUI
 import simd
 
 struct SpectrumView: View {
-    @ObservedObject var converter: VideoConverter
+    @ObservedObject var converter: VideoToAudio
     @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
@@ -41,11 +41,11 @@ struct SpectrumView: View {
                         )
                         
                         // --- Fetch previous spectrum ---
-                        let spectrum = converter.previousSpectrum
+                        let spectrum = converter.soundEngine.previousSpectrum
                         guard !spectrum.isEmpty else { return }
                         
                         // --- Fetch f values
-                        let f = converter.original_f
+                        let f = converter.soundEngine.original_f
                         guard !f.isEmpty else { return }
                         
                         // --- Compute magnitude in dB ---
@@ -130,5 +130,5 @@ struct SpectrumView: View {
 }
 
 #Preview {
-    SpectrumView(converter: VideoConverter())
+    SpectrumView(converter: VideoToAudio())
 }

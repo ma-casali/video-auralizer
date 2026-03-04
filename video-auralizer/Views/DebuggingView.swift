@@ -3,7 +3,8 @@ import UIKit
 import CoreGraphics
 
 struct ConvolutionDebugView: View {
-    @ObservedObject var converter: VideoConverter
+//    @ObservedObject var converter: VideoConverter
+    @ObservedObject var converter: VideoToAudio
     @StateObject private var camera = CameraModel()
     
     @State private var selectedMode = 0 // 0: Breathing, 1: V-Tilt, 2: H-Tilt, 3: Saddle
@@ -33,16 +34,16 @@ struct ConvolutionDebugView: View {
             GeometryReader { geo in
                 let currentData = getCurrentData()
                 
-                if !currentData.isEmpty && converter.debugSize.width > 0 {
+                if !currentData.isEmpty && converter.visionEngine.debugSize.width > 0 {
                     ZStack {
                         // 1. The Per-Pixel Heatmap
                         HeatmapView(data: currentData,
-                                    size: converter.debugSize,
+                                    size: converter.visionEngine.debugSize,
                                     mode: selectedMode)
                         
                         // 2. The 4x4 Numerical Overlay
-                        if !converter.cellAvgGrads.isEmpty {
-                            GridOverlay(grads: converter.cellAvgGrads, mode: selectedMode)
+                        if !converter.visionEngine.cellAvgGrads.isEmpty {
+                            GridOverlay(grads: converter.visionEngine.cellAvgGrads, mode: selectedMode)
                         }
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
@@ -54,7 +55,7 @@ struct ConvolutionDebugView: View {
                         ProgressView()
                         Text("Waiting for GPU Data...")
                             .foregroundColor(.secondary)
-                        Text("Buffers: H:\(converter.debugHue.count) S:\(converter.debugSaturation.count) I:\(converter.debugIntensity.count)")
+                        Text("Buffers: H:\(converter.visionEngine.debugHue.count) S:\(converter.visionEngine.debugSaturation.count) I:\(converter.visionEngine.debugIntensity.count)")
                             .font(.caption2)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -63,12 +64,16 @@ struct ConvolutionDebugView: View {
             .padding()
 
             // The Peak Hue Matrix at the bottom
-            DebugMatrix(peaks: converter.cellMaxHues)
+            DebugMatrix(peaks: converter.visionEngine.cellMaxHues)
         }
         .onAppear {
-            DispatchQueue.global(qos: .userInitiated).async {
-                camera.startSession()
-                converter.attachToSession(camera.session)
+            if !converter.isRunning {
+                converter.toggleProcessing()
+            }
+        }
+        .onDisappear {
+            if converter.isRunning {
+                converter.toggleProcessing()
             }
         }
     }
@@ -76,9 +81,9 @@ struct ConvolutionDebugView: View {
     // Helper to pick the correct buffer based on the picker
     private func getCurrentData() -> [SIMD4<Float>] {
         switch selectedChannel {
-        case 0: return converter.debugHue
-        case 1: return converter.debugSaturation
-        case 2: return converter.debugIntensity
+        case 0: return converter.visionEngine.debugHue
+        case 1: return converter.visionEngine.debugSaturation
+        case 2: return converter.visionEngine.debugIntensity
         default: return []
         }
     }
@@ -164,7 +169,7 @@ struct GridOverlay: View {
 
 // MARK: - Peak Matrix (The Hue Display)
 struct DebugMatrix: View {
-    let peaks: [Int?]
+    let peaks: [Int32?]
     
     var body: some View {
         VStack(spacing: 2) {
@@ -189,7 +194,7 @@ struct DebugMatrix: View {
 }
 
 struct CellView: View {
-    let hueBin: Int?
+    let hueBin: Int32?
     
     var body: some View {
         let bin = hueBin ?? 999

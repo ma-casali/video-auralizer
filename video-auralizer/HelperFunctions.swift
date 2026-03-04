@@ -230,3 +230,33 @@ func iFFT_Optimized(halfSpectrum: [DSPComplex]) -> [Float] {
     
     return output
 }
+
+func findClosestIndex(freqs: [Float], target: Float) -> Int {
+    let count = freqs.count
+    if count == 0 { return 0 }
+    
+    var low = 0
+    var high = count - 1
+    
+    // Binary search
+    while low <= high {
+        let mid = low + (high - low) / 2
+        if freqs[mid] < target {
+            low = mid + 1
+        } else if freqs[mid] > target {
+            high = mid - 1
+        } else {
+            return mid // Exact match found
+        }
+    }
+    
+    // Boundary checks
+    if low >= count { return count - 1 }
+    if low <= 0 { return 0 }
+    
+    // Determine which of the two remaining neighbors is actually closer
+    let diffCurrent = abs(freqs[low] - target)
+    let diffPrevious = abs(freqs[low - 1] - target)
+    
+    return diffCurrent < diffPrevious ? low : low - 1
+}

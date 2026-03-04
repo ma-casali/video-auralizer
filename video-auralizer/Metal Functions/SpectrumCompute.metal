@@ -9,21 +9,16 @@ using namespace metal;
 
 #define M_PI 3.14159265358979323846
 
-struct SpectrumParams {
-    float T;
-    float Q_scaling;
-    float spectrumMixing;
-    float frameSeed;
-    
-    uint P;
+struct SpectrumParameters {
     uint F;
+    float spectrumMixing;
     float binWidth;
-    float padding1;
-    
     float hpCutoff;
+    
     float lpCutoff;
     float hpOrder;
     float lpOrder;
+    float _padding;
 };
 
 
@@ -81,7 +76,7 @@ kernel void computeSpectrum(device const int* fundamentals [[buffer(0)]],
                             device const float2* previousSpectrum [[buffer(3)]],
                             device const float* phaseAccum [[buffer(4)]],
                             device float2* totalSum [[buffer(5)]],
-                            constant SpectrumParams& params [[buffer(6)]],
+                            constant SpectrumParameters& params [[buffer(6)]],
                             uint fIdx [[thread_position_in_grid]])
 {
     if (fIdx >= params.F) return;
