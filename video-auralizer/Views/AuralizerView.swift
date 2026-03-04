@@ -9,82 +9,112 @@ import SwiftUI
 import UIKit
 import CoreGraphics
 
+extension Image {
+    static let converterBackground = Image("ConverterScreen")
+}
+
+struct ConverterWallpaper: View {
+    var body: some View {
+        Image.converterBackground
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .ignoresSafeArea()
+    }
+}
+
+struct DraggableComponent<Content: View>: View {
+    let backgroundImage: String
+    let content: Content
+    let contentSize: CGSize
+    let contentOffset: CGFloat
+    let clickableHeight: CGFloat
+    let clickableOffset: CGFloat
+    let minOffset: CGFloat
+    let maxOffset: CGFloat
+    
+    @State private var offset: CGFloat = 0
+    @State private var lastOffset: CGFloat = 0
+    
+    var body: some View {
+        ZStack{
+            ZStack{
+                Image(backgroundImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                
+                content
+                    .frame(width: contentSize.width, height: contentSize.height)
+                    .offset(y: contentOffset)
+            }
+            .allowsHitTesting(false)
+            
+            Color.white.opacity(0.001)
+                .frame(height: clickableHeight)
+                .offset(y: clickableOffset)
+                .clipped()
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            let newOffset = lastOffset + value.translation.height
+                            offset = min(max(newOffset, minOffset), maxOffset)
+                        }
+                        .onEnded{ _ in lastOffset = offset}
+                )
+        }
+        .offset(y: offset)
+       
+    }
+}
+
+
 struct AuralizerView: View {
     @EnvironmentObject var converter: VideoToAudio
     @StateObject private var camera = CameraModel()
     
-    @State private var screenSize: CGSize = .zero
-    
     var body: some View {
-        NavigationStack {
-            
-            // --- Video preview ---
-            CameraPreview(session: camera.session)
-                .frame(height: 350)
-                .frame(width: screenSize.width*350.0/screenSize.height)
-                .cornerRadius(12)
-                .shadow(radius: 5)
-            
-            TimeDomainFrameView(converter: converter)
-                .frame(height: 150)
-                .padding(.horizontal, 10)
-            
-            // --- Spectrum analyzer & color bar ---
+        GeometryReader {geometry in
             ZStack {
-                SpectrumView(converter: converter)
-                    .frame(height: 150)
-                    .frame(width: 320)
-                    .clipped()
-                    .padding(.horizontal, 10)
+                Image("ConverterBackground")
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .ignoresSafeArea()
                 
-                FilterTool(x1Value: Binding(
-                    get: {CGFloat(log2(converter.soundEngine.hpCutoff/20.0)/log2(20_000.0/20.0))},
-                    set: {converter.soundEngine.hpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
-                            ),
-                           y1Value: Binding(
-                            get: {CGFloat(converter.soundEngine.hpOrder/10.0)} ,
-                            set: {converter.soundEngine.hpOrder = Float($0)*10.0}
-                            ),
-                           x2Value: Binding(
-                            get: {CGFloat(log2(converter.soundEngine.lpCutoff/20.0)/log2(20_000.0/20.0))},
-                            set: {converter.soundEngine.lpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
-                            ),
-                           y2Value: Binding(
-                            get: {CGFloat(converter.soundEngine.lpOrder/10.0)} ,
-                            set: {converter.soundEngine.lpOrder = Float($0)*10.0}
-                            )
+                ZStack{
+                    // Camera Unit (Non-moveable)
+                    CameraPreview(session: camera.session)
+                        .frame(width: 350, height:350*(16/9))
+                        .background(Color.gray)
+                        .cornerRadius(8)
+                        .offset(y: -180)
+                    
+                    // Time Signal Unit (Moveable)
+                    DraggableComponent(backgroundImage: "ConverterTimeSignal",
+                                       content: TimeDomainFrameView(converter: converter),
+                                       contentSize: CGSize(width: geometry.size.width, height: geometry.size.height*0.2),
+                                       contentOffset: 300 - 800/2.5,
+                                       clickableHeight: 860,
+                                       clickableOffset: 300,
+                                       minOffset: -120,
+                                       maxOffset: 250
                     )
-                .padding(.horizontal, 10)
-                .allowsHitTesting(true)
-                .contentShape(Rectangle())
-                .frame(height: 120)
-                .position(CGPoint(x: screenSize.width / 2, y: 60))
+                    
+                    // Spectrum Unit (Moveable)
+                    DraggableComponent(backgroundImage: "ConverterSpectrum",
+                                       content: SpectrumView(converter: converter),
+                                       contentSize: CGSize(width: geometry.size.width, height: geometry.size.height*0.2),
+                                       contentOffset: 300 - 360/4,
+                                       clickableHeight: 450,
+                                       clickableOffset: 300,
+                                       minOffset: -60,
+                                       maxOffset: 250
+                                       
+                    )
+                }
             }
-            .frame(height: 150)
-            .background(
-                        WindowReader { window in
-                            let size = window.windowScene?.screen.bounds.size ?? .zero
-                            self.screenSize = size
-                        }
-                        .allowsHitTesting(false)
-                    )
             .onAppear {
                 camera.startSession()
                 converter.visionEngine.attachToSession(camera.session)
             }
-            VStack{
-                Text(String(format: "High-Pass Cutoff: %.2f with Order: %.2f", converter.soundEngine.hpCutoff, converter.soundEngine.hpOrder))
-                Text(String(format: "Low-Pass Cutoff: %.2f with Order: %.2f", converter.soundEngine.lpCutoff, converter.soundEngine.lpOrder))
-            }
-            
-            NavigationLink(destination: ExtraControlView(converter: converter)){
-                Text("More Controls")
-                .foregroundColor(.blue)
-                .padding()
-                .background(Color.white)
-                .cornerRadius(8)
-            }
-
         }
     }
 }
@@ -105,4 +135,9 @@ struct WindowReader: UIViewRepresentable {
             }
         }
     }
+}
+
+#Preview{
+    AuralizerView()
+        .environmentObject(VideoToAudio())
 }

@@ -153,6 +153,29 @@ struct FilterToolDemo: View {
     }
 }
 
+//FilterTool(x1Value: Binding(
+//    get: {CGFloat(log2(converter.soundEngine.hpCutoff/20.0)/log2(20_000.0/20.0))},
+//    set: {converter.soundEngine.hpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
+//),
+//           y1Value: Binding(
+//            get: {CGFloat(converter.soundEngine.hpOrder/10.0)} ,
+//            set: {converter.soundEngine.hpOrder = Float($0)*10.0}
+//           ),
+//           x2Value: Binding(
+//            get: {CGFloat(log2(converter.soundEngine.lpCutoff/20.0)/log2(20_000.0/20.0))},
+//            set: {converter.soundEngine.lpCutoff = 20.0 * pow(2, Float($0) * log2(20_000.0/20.0))}
+//           ),
+//           y2Value: Binding(
+//            get: {CGFloat(converter.soundEngine.lpOrder/10.0)} ,
+//            set: {converter.soundEngine.lpOrder = Float($0)*10.0}
+//           )
+//)
+//.padding(.horizontal, 10)
+//.allowsHitTesting(true)
+//.contentShape(Rectangle())
+//.frame(height: 120)
+//.position(CGPoint(x: screenSize.width / 2, y: 60))
+
 #Preview{
     FilterToolDemo()
 }

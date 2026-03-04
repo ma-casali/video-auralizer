@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		DA3F726B2EE77691005251D9 /* video-auralizer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "video-auralizer.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DA3F726B2EE77691005251D9 /* Vaudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vaudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,7 +40,7 @@
 		DA3F726C2EE77691005251D9 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				DA3F726B2EE77691005251D9 /* video-auralizer.app */,
+				DA3F726B2EE77691005251D9 /* Vaudio.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		DA3F726A2EE77691005251D9 /* video-auralizer */ = {
+		DA3F726A2EE77691005251D9 /* Vaudio */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = DA3F72762EE77693005251D9 /* Build configuration list for PBXNativeTarget "video-auralizer" */;
+			buildConfigurationList = DA3F72762EE77693005251D9 /* Build configuration list for PBXNativeTarget "Vaudio" */;
 			buildPhases = (
 				DA3F72672EE77691005251D9 /* Sources */,
 				DA3F72682EE77691005251D9 /* Frameworks */,
@@ -63,11 +63,11 @@
 			fileSystemSynchronizedGroups = (
 				DA3F726D2EE77691005251D9 /* video-auralizer */,
 			);
-			name = "video-auralizer";
+			name = Vaudio;
 			packageProductDependencies = (
 			);
 			productName = "video-auralizer";
-			productReference = DA3F726B2EE77691005251D9 /* video-auralizer.app */;
+			productReference = DA3F726B2EE77691005251D9 /* Vaudio.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = DA3F72662EE77691005251D9 /* Build configuration list for PBXProject "video-auralizer" */;
+			buildConfigurationList = DA3F72662EE77691005251D9 /* Build configuration list for PBXProject "Vaudio" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				DA3F726A2EE77691005251D9 /* video-auralizer */,
+				DA3F726A2EE77691005251D9 /* Vaudio */,
 			);
 		};
 /* End PBXProject section */
@@ -313,7 +313,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		DA3F72662EE77691005251D9 /* Build configuration list for PBXProject "video-auralizer" */ = {
+		DA3F72662EE77691005251D9 /* Build configuration list for PBXProject "Vaudio" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				DA3F72742EE77693005251D9 /* Debug */,
@@ -322,7 +322,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		DA3F72762EE77693005251D9 /* Build configuration list for PBXNativeTarget "video-auralizer" */ = {
+		DA3F72762EE77693005251D9 /* Build configuration list for PBXNativeTarget "Vaudio" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				DA3F72772EE77693005251D9 /* Debug */,
