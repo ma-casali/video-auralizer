@@ -42,6 +42,7 @@ struct HomeView: View {
                             .frame(height: geometry.size.height*0.2)
                         
                         Text("Welcome to Vaudio!")
+                            .foregroundColor(.black)
                             .font(.system(size: 64, weight: .bold, design: .rounded))
                             .multilineTextAlignment(.center)
                         

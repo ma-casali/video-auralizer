@@ -45,8 +45,8 @@ struct SpectrumView: View {
                             return 20 * log10( c / maxMagnitude)
                         }
                         
-                        let maxDB: Float = 0
-                        let minDB: Float = -180
+                        let maxDB: Float = 5
+                        let minDB: Float = -60
                         
                         // --- Draw spectrum line ---
                         var path = Path()
@@ -61,7 +61,7 @@ struct SpectrumView: View {
                         }
                         context.stroke(
                             path,
-                            with: .color(.black),
+                            with: .color(.white),
                             style: StrokeStyle(
                                 lineWidth: 5,
                                 lineCap: .round,

@@ -13,11 +13,13 @@ final class VideoToAudio: ObservableObject {
     private let captureSession = AVCaptureSession()
     
     @Published var isRunning = false
+    @Published public var spectrumMixing: Float32 = 0.9
 
     private var cancellables = Set<AnyCancellable>()
     
     init() {
         
+        // shared metal values
         let sharedDevice = MTLCreateSystemDefaultDevice()!
         let commandQueue = sharedDevice.makeCommandQueue()
         var textureCache: CVMetalTextureCache!
@@ -29,6 +31,11 @@ final class VideoToAudio: ObservableObject {
         soundEngine.device = sharedDevice
         soundEngine.commandQueue = commandQueue
         
+        // shared misc. values
+        visionEngine.spectrumMixing = self.spectrumMixing
+        soundEngine.spectrumMixing = self.spectrumMixing
+        
+        // make connections and set up camera
         setupEngines()
         setupCamera()
         
@@ -62,7 +69,7 @@ final class VideoToAudio: ObservableObject {
         visionEngine.attachToSession(captureSession)
         
         guard let videoDevice = AVCaptureDevice.default(.builtInDualCamera, for: .video, position: .back) else {
-            print("Camera Error: Could not find back camera.")
+            print("Camera Error: Could not find camera.")
             captureSession.commitConfiguration()
             return
         }

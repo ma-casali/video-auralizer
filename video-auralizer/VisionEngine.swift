@@ -23,7 +23,7 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private var mipTexture: MTLTexture?
     private var currentMipLevel: Int = 3
     
-    // initialization of values
+    // pixel values for feature extraction & debugging
     @Published public var debugHue: [SIMD4<Float>]
     @Published public var debugSaturation: [SIMD4<Float>]
     @Published public var debugIntensity: [SIMD4<Float>]
@@ -32,7 +32,8 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     @Published public var debugSize: CGSize
     @Published public var cellMaxHues: [Int32] = Array(repeating: 0, count: 16)
     
-    private let spectrumMixing: Float = 0.9
+    // smoothing value
+    @Published public var spectrumMixing: Float32 = 0.9
     
     weak var delegate: VisionEngineDelegate?
     

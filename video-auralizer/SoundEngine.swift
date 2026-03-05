@@ -63,8 +63,8 @@ public class SoundEngine: NSObject, ObservableObject {
     private var previousSpectrumDSP: [Complex]
     @Published private(set) var previousSpectrum: [Complex]
     @Published public var previousSignal: [Float]
-    @Published public var attack: Float32 = 0.25
-    @Published public var release: Float32 = 0.25
+    @Published public var attack: Float32 = 1.0
+    @Published public var release: Float32 = 1.0
     @Published public var spectrumMixing: Float32 = 0.9
     @Published public var hpCutoff: Float32 = 200.0
     @Published public var lpCutoff: Float32 = 18_000.0
@@ -102,15 +102,16 @@ public class SoundEngine: NSObject, ObservableObject {
         // j11 = 3.8317
         1.0964, // j31
         1.7292, // j12
-        6.7061 / 3.8317, // j22
-        7.0156 / 3.8317, // j02
-        8.0152 / 3.8317, // j32
-        8.5363 / 3.8317, // j13
-        9.9695 / 3.8317, // j23
-        10.1735 / 3.8317, // j03
-        11.3459 / 3.8317, // j33
+        1.7502, // j22
+        1.8309, // j02
+        2.0918, // j32
+        2.2278, // j13
+        2.6018, // j23
+        2.6651, // j03
+        2.9611, // j33
     ]
     
+    // MARK: - Initialization
     override init() {
         self.N = self.NFFT - 2
         self.F = max(2, self.N / 2)
@@ -127,6 +128,7 @@ public class SoundEngine: NSObject, ObservableObject {
         self.binWidth = (self.sampleRate / Float(self.N) )
     }
     
+    // MARK: - Metal Setup
     func setupMetalCompute() {
         guard let library = device.makeDefaultLibrary() else {return}
         
@@ -230,6 +232,7 @@ public class SoundEngine: NSObject, ObservableObject {
         return output
     }
     
+    // MARK: - Phase Accumulation
     func applyPhaseAccumulation(hues: [Int32]) -> [Float] {
         for cell in 0..<16 {
             
@@ -339,6 +342,7 @@ public class SoundEngine: NSObject, ObservableObject {
         
     }
     
+    // MARK: - Audio Frame Rendering
     func renderAudioFrame(hues: [Int32], grads: [SIMD4<Float>], P: Int) -> [Float] {
         // Update Phase Accumulation
         self.phaseAccumulation = self.applyPhaseAccumulation(hues: hues)

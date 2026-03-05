@@ -11,10 +11,6 @@ import SwiftUI
 struct TimeDomainFrameView: View {
     @ObservedObject var converter: VideoToAudio
     @Environment(\.colorScheme) var colorScheme
-    
-    var waveFormColor: Color {
-        colorScheme == .dark ? .white : .black
-    }
 
     var body: some View {
         GeometryReader { geo in
@@ -25,7 +21,7 @@ struct TimeDomainFrameView: View {
 
                 let midY = size.height / 2
                 let scaleX = size.width / CGFloat(N - 1)
-                let scaleY = midY
+                let scaleY = midY * 0.8
 
                 var path = Path()
 
@@ -42,8 +38,12 @@ struct TimeDomainFrameView: View {
 
                 context.stroke(
                     path,
-                    with: .color(waveFormColor),
-                    lineWidth: 1.5
+                    with: .color(.white),
+                    style: StrokeStyle(
+                        lineWidth: 5,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
                 )
             }
             .background(Color.black.opacity(0.0))
