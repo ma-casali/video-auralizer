@@ -12,6 +12,9 @@ struct ConvolutionDebugView: View {
 
     var body: some View {
         VStack {
+            
+            Text("\(round(converter.soundEngine.processingLatency)) ms latency")
+            
             // Channel Selector
             Picker("Channel", selection: $selectedChannel) {
                 Text("Hue").tag(0)

@@ -7,7 +7,7 @@ import simd
 import Accelerate
 
 protocol VisionEngineDelegate: AnyObject {
-    func visionEngine(_ engine: VisionEngine, didExtractFeatures hues: [Int32], grads: [SIMD4<Float>])
+    func visionEngine(_ engine: VisionEngine, didExtractFeatures hues: [Int32], grads: [SIMD4<Float>], startTime: Double)
 }
 
 final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, ObservableObject {
@@ -34,6 +34,9 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     
     // smoothing value
     @Published public var spectrumMixing: Float32 = 0.9
+    
+    // latency tracking
+    @Published public var startTime: Double = 0
     
     weak var delegate: VisionEngineDelegate?
     
@@ -88,6 +91,9 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        
+        // capture start time for latency measurement
+        self.startTime = CACurrentMediaTime()
         
         guard
             let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
@@ -183,7 +189,6 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let mipWidth = width >> self.currentMipLevel
         let mipHeight = height >> self.currentMipLevel
         let mipPixelCount = mipWidth * mipHeight
-        let requiredLength = mipPixelCount * MemoryLayout<Float>.stride * 4
         var mipLevel = UInt32(self.currentMipLevel)
         
         let numBins = 360
@@ -249,7 +254,7 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             
             // --- 1. Extract Hues from Histogram ---
             let histPointer = histogramBuffer.contents().assumingMemoryBound(to: UInt32.self)
-            let histData = Array(UnsafeBufferPointer(start: histPointer, count: numBins * numCells))
+            let histData = UnsafeBufferPointer(start: histPointer, count: numBins * numCells)
             var updatedHues: [Int32] = self.cellMaxHues
             
             for cellIdx in 0..<16 {
@@ -258,13 +263,16 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
                 if let maxVal = cellHist.max(), maxVal > 20,
                    let maxIndex = cellHist.indices.max(by: { cellHist[$0] < cellHist[$1] }) {
                     let hueBin = maxIndex - start
-                    updatedHues[cellIdx] = Int32(Float(updatedHues[cellIdx]) * self.spectrumMixing + Float(hueBin) * (1.0 - self.spectrumMixing))
+                    let currentHue = Float(updatedHues[cellIdx])
+                    let mix = self.spectrumMixing
+                    let newHueValue = (currentHue * mix) + (Float(hueBin) * (1.0 - mix))
+                    updatedHues[cellIdx] = Int32(newHueValue)
                 }
             }
             
             // --- 2. Extract and Process Gradients ---
             let intensityPtr = intensityBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self)
-            let intensityData = Array(UnsafeBufferPointer(start: intensityPtr, count: mipPixelCount))
+            let intensityData = UnsafeBufferPointer(start: intensityPtr, count: mipPixelCount)
             
             var newCellAvgGrads: [SIMD4<Float>] = Array(repeating: .zero, count: 16)
             let pixelsPerCell = mipPixelCount / 16
@@ -287,19 +295,19 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             }
             
             // --- 3. Extract Raw Data for Debuggers ---
-            let hData = Array(UnsafeBufferPointer(start: hueBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount))
-            let sData = Array(UnsafeBufferPointer(start: saturationBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount))
+            let hData = UnsafeBufferPointer(start: hueBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount)
+            let sData = UnsafeBufferPointer(start: saturationBuffer.contents().assumingMemoryBound(to: SIMD4<Float>.self), count: mipPixelCount)
             
             // --- 4. Notify SoundEngine via Delegate ---
-            self.delegate?.visionEngine(self, didExtractFeatures: updatedHues, grads: newCellAvgGrads)
+            self.delegate?.visionEngine(self, didExtractFeatures: updatedHues, grads: newCellAvgGrads, startTime: startTime)
             
             // --- 5. Update UI on Main Thread ---
             DispatchQueue.main.async {
                 self.cellMaxHues = updatedHues
                 self.cellAvgGrads = newCellAvgGrads
-                self.debugHue = hData
-                self.debugSaturation = sData
-                self.debugIntensity = intensityData
+//                self.debugHue = Array(hData)
+//                self.debugSaturation = Array(sData)
+//                self.debugIntensity = Array(intensityData)
                 self.debugSize = CGSize(width: mipWidth, height: mipHeight)
             }
         }

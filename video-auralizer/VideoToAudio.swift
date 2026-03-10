@@ -41,12 +41,14 @@ final class VideoToAudio: ObservableObject {
         
         // connect notifications from each engine to VideoToAudio
         visionEngine.objectWillChange
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
         
         soundEngine.objectWillChange
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
@@ -119,7 +121,7 @@ final class VideoToAudio: ObservableObject {
 }
 
 extension VideoToAudio: VisionEngineDelegate {
-    func visionEngine(_ engine: VisionEngine, didExtractFeatures hues: [Int32], grads: [SIMD4<Float>]) {
-        _ = soundEngine.renderAudioFrame(hues: hues, grads: grads, P: 0)
+    func visionEngine(_ engine: VisionEngine, didExtractFeatures hues: [Int32], grads: [SIMD4<Float>], startTime: Double) {
+        _ = soundEngine.renderAudioFrame(hues: hues, grads: grads, P: 0, startTime: startTime)
     }
 }

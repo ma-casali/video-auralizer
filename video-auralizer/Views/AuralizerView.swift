@@ -67,8 +67,10 @@ struct FolderComponent<Content: View>: View {
     
     let bottomSnapPoint: CGFloat
 
-    @State private var isAtBottom: Bool = false
+    @Binding public var isAtBottom: Bool
     @State private var offset: CGFloat = 0
+    
+    var isInteractionDisabled: Bool = false
     
     var body: some View {
         GeometryReader{ geometry in
@@ -111,6 +113,7 @@ struct FolderComponent<Content: View>: View {
                                     }
                                 }
                         )
+                        .allowsHitTesting(!isInteractionDisabled)
                 }
             }
             .offset(y: offset)
@@ -122,6 +125,10 @@ struct FolderComponent<Content: View>: View {
 struct AuralizerView: View {
     @EnvironmentObject var converter: VideoToAudio
     @StateObject private var camera = CameraModel()
+    
+    // New States to track positions
+    @State private var signalIsBottom = false
+    @State private var spectrumIsBottom = false
     
     var body: some View {
         GeometryReader {geometry in
@@ -144,23 +151,27 @@ struct AuralizerView: View {
                     // Time Signal Unit (Moveable)
                     FolderComponent(backgroundImage: "ConverterSignalBackground",
                                     content: TimeDomainFrameView(converter: converter),
-                                    contentSize: CGSize(width: geometry.size.width, height: geometry.size.height*0.2),
+                                    contentSize: CGSize(width: geometry.size.width, height: geometry.size.height*0.4),
                                     contentOffset: geometry.size.height*0.15,
                                     contentDescription: String("Audio Waveform"),
                                     popupDescription: String("This is the audio waveform displayed in real-time. It is generated from the spectrum shown on this page and represents what you are hearing."),
-                                    textPosition: -geometry.size.height*0.45,
-                                    bottomSnapPoint: geometry.size.height * 0.7
+                                    textPosition: -geometry.size.height*0.25,
+                                    bottomSnapPoint: geometry.size.height * 0.5,
+                                    isAtBottom: $signalIsBottom,
+                                    isInteractionDisabled: (spectrumIsBottom == false)
                     )
                     
                     // Spectrum Unit (Moveable)
                     FolderComponent(backgroundImage: "ConverterSpectrumBackground",
                                     content: SpectrumView(converter: converter),
-                                    contentSize: CGSize(width: geometry.size.width, height: geometry.size.height*0.3),
-                                    contentOffset: geometry.size.height/2 - geometry.size.height*0.15,
+                                    contentSize: CGSize(width: geometry.size.width, height: geometry.size.height*0.4),
+                                    contentOffset: geometry.size.height/2 - geometry.size.height*0.2,
                                     contentDescription: String("Audio Spectrum"),
                                     popupDescription: String("This is the audio frequency spectrum displayed on a logarithmic frqeuency axis in real-time. It represents the different frequencies present in the audio you are hearing."),
-                                    textPosition: -geometry.size.height*0.05,
-                                    bottomSnapPoint: geometry.size.height/2 * 0.9
+                                    textPosition: geometry.size.height*0.0,
+                                    bottomSnapPoint: geometry.size.height/2 * 0.75,
+                                    isAtBottom: $spectrumIsBottom,
+                                    isInteractionDisabled: (signalIsBottom == true)
                     )
                 }
             }

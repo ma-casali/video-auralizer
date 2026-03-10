@@ -80,6 +80,9 @@ public class SoundEngine: NSObject, ObservableObject {
     private var audioFormat: AVAudioFormat!
     private var frameIndex: Int = 0
     
+    // latency parameters
+    @Published public var processingLatency: Double = 0.0
+    
     // buffer parameters
     var metalBuffer: MTLBuffer!
     private let audioBufferSize = 16
@@ -97,6 +100,7 @@ public class SoundEngine: NSObject, ObservableObject {
         return w
     }()
     private var phaseAccumulation = [Float](repeating: 0.0, count: 16 * (13 + 9)) // one for each cell-harmonic combo 
+    private var isBufferWarmedUp: Bool = false
     
     private let besselRatios: [Float] = [
         // j11 = 3.8317
@@ -151,9 +155,15 @@ public class SoundEngine: NSObject, ObservableObject {
         
         sourceNode = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
             guard let self = self else { return noErr }
-            let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            
+
             self.audioBufferLock.lock()
+                if self.availableFrames < 3 && !self.isBufferWarmedUp {
+                    self.audioBufferLock.unlock()
+                    return noErr
+                }
+                self.isBufferWarmedUp = true
+            
+            let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             
             for buffer in ablPointer {
                 let buf = buffer.mData!.assumingMemoryBound(to: Float.self)
@@ -270,8 +280,9 @@ public class SoundEngine: NSObject, ObservableObject {
         grads: [SIMD4<Float>],
         frequencies: [Float],
         P: Int,
+        startTime: Double,
         spectrumParameters: SpectrumParameters,
-        completion: @escaping ([Complex]) -> Void
+        completion: @escaping ([Complex], Double) -> Void
     ){
         let F = frequencies.count
         var previous = previousSpectrum.map { simd_float2($0.real, $0.imag) }
@@ -290,7 +301,7 @@ public class SoundEngine: NSObject, ObservableObject {
         // Encode GPU command
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
-            completion([])
+            completion([], 0)
             return
         }
         
@@ -335,7 +346,7 @@ public class SoundEngine: NSObject, ObservableObject {
             }
             
             // call completion closure
-            completion(result)
+            completion(result, startTime)
         }
         
         commandBuffer.commit()
@@ -343,7 +354,7 @@ public class SoundEngine: NSObject, ObservableObject {
     }
     
     // MARK: - Audio Frame Rendering
-    func renderAudioFrame(hues: [Int32], grads: [SIMD4<Float>], P: Int) -> [Float] {
+    func renderAudioFrame(hues: [Int32], grads: [SIMD4<Float>], P: Int, startTime: Double) -> [Float] {
         // Update Phase Accumulation
         self.phaseAccumulation = self.applyPhaseAccumulation(hues: hues)
 
@@ -376,8 +387,9 @@ public class SoundEngine: NSObject, ObservableObject {
             grads: grads,
             frequencies: self.original_f,
             P: P,
+            startTime: startTime,
             spectrumParameters: spectrumParams
-        ){summedSpectrum in
+        ){(summedSpectrum, startTime) in
             
             // Mirror and conjugate
             let fullSpectrum = mirrorAndConjugate(summedSpectrum)
@@ -404,19 +416,29 @@ public class SoundEngine: NSObject, ObservableObject {
             
             let outputSignalFrame = self.applyOverlapAdd(signal: normalizedSignal)
             
+            // calculate latency
+            let endTime = CACurrentMediaTime()
+            let totalLatency = (endTime - startTime) * 1000
+            let hardwareOutputLatency = self.hardwareLatency
+            let trueLatency = totalLatency + hardwareOutputLatency
+            
             DispatchQueue.main.async {
                 self.previousSignal = outputSignalFrame
+                self.processingLatency = trueLatency
             }
             
             // Store frame in circular buffer safely
             self.audioBufferLock.lock()
             defer { self.audioBufferLock.unlock() }
             
+            print(self.availableFrames)
+            
             // Only overwrite if there is room (avoid overwriting unread frames)
             if self.availableFrames < self.audioBufferSize {
                 self.audioFrames[self.writeIndex] = outputSignalFrame
                 self.writeIndex = (self.writeIndex + 1) % self.audioBufferSize
                 self.availableFrames += 1
+                
             }
         }
         return self.previousSignal
@@ -438,5 +460,15 @@ public class SoundEngine: NSObject, ObservableObject {
         audioBufferLock.unlock()
         
         print("SoundEngine: Audio stopped and buffers cleared.")
+    }
+}
+
+extension SoundEngine {
+    var hardwareLatency: Double {
+        let session = AVAudioSession.sharedInstance()
+        let outputLatency = session.outputLatency
+        let ioBufferDuration = session.ioBufferDuration
+        let engineLatency = audioEngine.outputNode.presentationLatency
+        return (outputLatency + ioBufferDuration + engineLatency) * 1000
     }
 }
