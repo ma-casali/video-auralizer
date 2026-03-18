@@ -6,7 +6,22 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		63C5DBE42F6B365100EDA7F8 /* MainApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C5DBE02F6B365100EDA7F8 /* MainApp.swift */; };
+		63C5DBE52F6B365100EDA7F8 /* Visualizer.metal in Sources */ = {isa = PBXBuildFile; fileRef = 63C5DBE22F6B365100EDA7F8 /* Visualizer.metal */; };
+		63C5DBE62F6B365100EDA7F8 /* Beamformer.metal in Sources */ = {isa = PBXBuildFile; fileRef = 63C5DBDE2F6B365100EDA7F8 /* Beamformer.metal */; };
+		63C5DBE72F6B365100EDA7F8 /* AcousticEngine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 63C5DBDD2F6B365100EDA7F8 /* AcousticEngine.cpp */; };
+		63C5DBE82F6B365100EDA7F8 /* EngineBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 63C5DBDF2F6B365100EDA7F8 /* EngineBridge.mm */; };
+		63C5DBE92F6B365100EDA7F8 /* MetalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C5DBE12F6B365100EDA7F8 /* MetalView.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		63C5DBDD2F6B365100EDA7F8 /* AcousticEngine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AcousticEngine.cpp; sourceTree = "<group>"; };
+		63C5DBDE2F6B365100EDA7F8 /* Beamformer.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Beamformer.metal; sourceTree = "<group>"; };
+		63C5DBDF2F6B365100EDA7F8 /* EngineBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = EngineBridge.mm; sourceTree = "<group>"; };
+		63C5DBE02F6B365100EDA7F8 /* MainApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainApp.swift; sourceTree = "<group>"; };
+		63C5DBE12F6B365100EDA7F8 /* MetalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalView.swift; sourceTree = "<group>"; };
+		63C5DBE22F6B365100EDA7F8 /* Visualizer.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Visualizer.metal; sourceTree = "<group>"; };
 		DA3F726B2EE77691005251D9 /* Vaudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vaudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -29,9 +44,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		63C5DBE32F6B365100EDA7F8 /* audio-to-video */ = {
+			isa = PBXGroup;
+			children = (
+				63C5DBDD2F6B365100EDA7F8 /* AcousticEngine.cpp */,
+				63C5DBDE2F6B365100EDA7F8 /* Beamformer.metal */,
+				63C5DBDF2F6B365100EDA7F8 /* EngineBridge.mm */,
+				63C5DBE02F6B365100EDA7F8 /* MainApp.swift */,
+				63C5DBE12F6B365100EDA7F8 /* MetalView.swift */,
+				63C5DBE22F6B365100EDA7F8 /* Visualizer.metal */,
+			);
+			path = "audio-to-video";
+			sourceTree = "<group>";
+		};
 		DA3F72622EE77691005251D9 = {
 			isa = PBXGroup;
 			children = (
+				63C5DBE32F6B365100EDA7F8 /* audio-to-video */,
 				DA3F726D2EE77691005251D9 /* video-auralizer */,
 				DA3F726C2EE77691005251D9 /* Products */,
 			);
@@ -119,6 +148,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				63C5DBE42F6B365100EDA7F8 /* MainApp.swift in Sources */,
+				63C5DBE52F6B365100EDA7F8 /* Visualizer.metal in Sources */,
+				63C5DBE62F6B365100EDA7F8 /* Beamformer.metal in Sources */,
+				63C5DBE72F6B365100EDA7F8 /* AcousticEngine.cpp in Sources */,
+				63C5DBE82F6B365100EDA7F8 /* EngineBridge.mm in Sources */,
+				63C5DBE92F6B365100EDA7F8 /* MetalView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
