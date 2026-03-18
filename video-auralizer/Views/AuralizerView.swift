@@ -86,16 +86,16 @@ struct FolderComponent<Content: View>: View {
 //                            .border(.white, width: 4) // debug
                             .offset(y: contentOffset)
                     
-                    Text(contentDescription!)
-                        .foregroundColor(.black)
-                        .padding()
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .multilineTextAlignment(.trailing)
-                        .background(.white.opacity(0.75))
-                        .cornerRadius(8)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .offset(y: textPosition)
-                        .padding(.horizontal)
+//                    Text(contentDescription!)
+//                        .foregroundColor(.black)
+//                        .padding()
+//                        .font(.system(size: 20, weight: .bold, design: .rounded))
+//                        .multilineTextAlignment(.trailing)
+//                        .background(.white.opacity(0.75))
+//                        .cornerRadius(8)
+//                        .frame(maxWidth: .infinity, alignment: .trailing)
+//                        .offset(y: textPosition)
+//                        .padding(.horizontal)
                 }
                 .allowsHitTesting(false)
                 

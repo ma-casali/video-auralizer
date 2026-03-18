@@ -57,17 +57,26 @@ inline float sinc(float x) {
 }
 
 // --- Normalized Bessel Zeros ---
-constant float besselRatios[9] = {
-    // j11 = 3.8317
-    4.2012 / 3.8317, // j31
-    5.3314 / 3.8317, // j12
-    6.7061 / 3.8317, // j22
-    7.0156 / 3.8317, // j02
-    8.0152 / 3.8317, // j32
-    8.5363 / 3.8317, // j13
-    9.9695 / 3.8317, // j23
-    10.1735 / 3.8317, // j03
-    11.3459 / 3.8317, // j33
+constant float besselRatios[19] = {
+    1.59334,
+    2.13555,
+    2.29542,
+    2.65307,
+    2.9173,
+    3.15546,
+    3.50015,
+    3.64745,
+    4.05893,
+    4.13174,
+    4.60104,
+    4.61005,
+    5.08357,
+    5.13077,
+    5.55313,
+    5.65084,
+    6.01936,
+    6.16314,
+    6.48274
 };
 
 kernel void computeSpectrum(device const int* fundamentals [[buffer(0)]],
@@ -133,23 +142,23 @@ kernel void computeSpectrum(device const int* fundamentals [[buffer(0)]],
             totalCellGain += hGain;
             
             if (h > 1) { // Apply only to harmonics
-                float vWeight = 1.0f;
-                float hWeight = 1.0f;
-
-                // Even/Odd Weighting (V-Tilt vs H-Tilt)
-                if (vTiltAbs == 0) {
-                    vWeight = 0.0f;
-                    hWeight = 1.0f;
-                } else if (hTiltAbs == 0) {
-                    vWeight = 1.0f;
-                    hWeight = 0.0f;
-                } else {
-                    vWeight = vTiltAbs / max(hTiltAbs, vTiltAbs);
-                    hWeight = hTiltAbs / max(hTiltAbs, vTiltAbs);
-                }
+//                float vWeight = 1.0f;
+//                float hWeight = 1.0f;
+//
+//                // Even/Odd Weighting (V-Tilt vs H-Tilt)
+//                if (vTiltAbs == 0) {
+//                    vWeight = 0.0f;
+//                    hWeight = 1.0f;
+//                } else if (hTiltAbs == 0) {
+//                    vWeight = 1.0f;
+//                    hWeight = 0.0f;
+//                } else {
+//                    vWeight = vTiltAbs / max(hTiltAbs, vTiltAbs);
+//                    hWeight = hTiltAbs / max(hTiltAbs, vTiltAbs);
+//                }
                 
-                if (h % 2 == 0) hGain *= vWeight;
-                else            hGain *= hWeight;
+                if (h % 2 == 0) hGain *= vTiltAbs;
+                else            hGain *= hTiltAbs;
             }
 
             // Windowed Sine accumulation
@@ -160,7 +169,7 @@ kernel void computeSpectrum(device const int* fundamentals [[buffer(0)]],
 
         // 5. Inharmonic Bessel Modes (Saddle Mode)
         // This adds the "metallic" Neumann membrane character
-        for (int b = 0; b < 8; ++b) {
+        for (int b = 0; b < 18; ++b) {
             float bFreq = f0 * besselRatios[b];
             if (bFreq > 20000.0f) break;
             

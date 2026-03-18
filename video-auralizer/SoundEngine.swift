@@ -99,20 +99,30 @@ public class SoundEngine: NSObject, ObservableObject {
         vDSP_hann_window(&w, 4096, Int32(vDSP_HANN_NORM))
         return w
     }()
-    private var phaseAccumulation = [Float](repeating: 0.0, count: 16 * (13 + 9)) // one for each cell-harmonic combo 
+    private var phaseAccumulation: [Float]
     private var isBufferWarmedUp: Bool = false
     
     private let besselRatios: [Float] = [
-        // j11 = 3.8317
-        1.0964, // j31
-        1.7292, // j12
-        1.7502, // j22
-        1.8309, // j02
-        2.0918, // j32
-        2.2278, // j13
-        2.6018, // j23
-        2.6651, // j03
-        2.9611, // j33
+        // j01 = 2.4048
+        1.59334,
+        2.13555,
+        2.29542,
+        2.65307,
+        2.9173,
+        3.15546,
+        3.50015,
+        3.64745,
+        4.05893,
+        4.13174,
+        4.60104,
+        4.61005,
+        5.08357,
+        5.13077,
+        5.55313,
+        5.65084,
+        6.01936,
+        6.16314,
+        6.48274
     ]
     
     // MARK: - Initialization
@@ -124,6 +134,7 @@ public class SoundEngine: NSObject, ObservableObject {
         self.previousSignal = [Float](repeating: 0, count: Int(self.N))
         
         self.audioFrames = Array(repeating: [Float](repeating: 0, count: self.hopSize), count: audioBufferSize)
+        self.phaseAccumulation = [Float](repeating: 0.0, count: 16 * (13 + self.besselRatios.count)) // one for each cell-harmonic combo 
         
         super.init()
         
@@ -255,7 +266,7 @@ public class SoundEngine: NSObject, ObservableObject {
             // Classical Harmonics loop
             for h in 1...13 {
                 let hFreq = f0 * Float(h)
-                let idx = (cell * (13 + 9)) + (h - 1)
+                let idx = (cell * (13 + self.besselRatios.count)) + (h - 1)
                 
                 // Explicitly cast all components to Float
                 let phaseAdvance = (Float.pi * 2.0 * hFreq * Float(self.hopSize)) / Float(self.sampleRate)
@@ -263,9 +274,9 @@ public class SoundEngine: NSObject, ObservableObject {
             }
             
             // Bessel loop
-            for b in 0..<9 {
+            for b in 0..<self.besselRatios.count {
                 let bFreq = f0 * Float(self.besselRatios[b])
-                let idx = (cell * (13 + 9)) + 13 + b // Offset by 13 to not overwrite harmonics
+                let idx = (cell * (13 + self.besselRatios.count)) + 13 + b // Offset by 13 to not overwrite harmonics
                 
                 let phaseAdvance = (Float.pi * 2.0 * bFreq * Float(self.hopSize)) / Float(self.sampleRate)
                 self.phaseAccumulation[idx] = (self.phaseAccumulation[idx] + phaseAdvance).truncatingRemainder(dividingBy: Float.pi * 2.0)
@@ -294,7 +305,7 @@ public class SoundEngine: NSObject, ObservableObject {
         let gradsBuffer = device.makeBuffer(bytes: grads, length: 16 * MemoryLayout<SIMD4<Float>>.stride, options: [])
         let freqBuffer = device.makeBuffer(bytes: frequencies, length: F * MemoryLayout<Float>.stride, options: [])
         let previousBuffer = device.makeBuffer(bytes: &previous, length: F * MemoryLayout<simd_float2>.size, options: [])
-        let phaseAccumulationBuffer = device.makeBuffer(bytes: &self.phaseAccumulation, length: (16 * (13 + 9)) * MemoryLayout<Float>.size, options: [])
+        let phaseAccumulationBuffer = device.makeBuffer(bytes: &self.phaseAccumulation, length: (16 * (13 + self.besselRatios.count)) * MemoryLayout<Float>.size, options: [])
         let totalSumBuffer = device.makeBuffer(bytes: &totalSumData, length: F * MemoryLayout<simd_float2>.size, options: [])
         let paramBuffer = device.makeBuffer(bytes: &params, length: MemoryLayout<SpectrumParameters>.stride, options: [])
         
